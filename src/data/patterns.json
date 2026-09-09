@@ -1,0 +1,102 @@
+[
+  {
+    "id": "aws-access-key-id",
+    "name": "AWS Access Key ID",
+    "provider": "AWS",
+    "regex": "\\b(AKIA|ASIA)[0-9A-Z]{16}\\b",
+    "flags": "",
+    "confidence": "high",
+    "severity": "critical",
+    "entropyCheck": false
+  },
+  {
+    "id": "aws-secret-access-key",
+    "name": "AWS Secret Access Key",
+    "provider": "AWS",
+    "regex": "aws(.{0,40})?['\"]([0-9a-zA-Z/+]{40})['\"]",
+    "flags": "i",
+    "confidence": "medium",
+    "severity": "critical",
+    "entropyCheck": true
+  },
+  {
+    "id": "stripe-live-secret-key",
+    "name": "Stripe Live Secret Key",
+    "provider": "Stripe",
+    "regex": "\\bsk_live_[0-9a-zA-Z]{24,}\\b",
+    "flags": "",
+    "confidence": "high",
+    "severity": "critical",
+    "entropyCheck": false
+  },
+  {
+    "id": "stripe-live-publishable-key",
+    "name": "Stripe Live Publishable Key",
+    "provider": "Stripe",
+    "regex": "\\bpk_live_[0-9a-zA-Z]{24,}\\b",
+    "flags": "",
+    "confidence": "high",
+    "severity": "low",
+    "entropyCheck": false
+  },
+  {
+    "id": "github-personal-access-token",
+    "name": "GitHub Personal Access Token",
+    "provider": "GitHub",
+    "regex": "\\bghp_[0-9a-zA-Z]{36}\\b",
+    "flags": "",
+    "confidence": "high",
+    "severity": "critical",
+    "entropyCheck": false
+  },
+  {
+    "id": "github-fine-grained-pat",
+    "name": "GitHub Fine-Grained Personal Access Token",
+    "provider": "GitHub",
+    "regex": "\\bgithub_pat_[0-9a-zA-Z_]{22,}\\b",
+    "flags": "",
+    "confidence": "high",
+    "severity": "critical",
+    "entropyCheck": false
+  },
+  {
+    "id": "openai-api-key",
+    "name": "OpenAI API Key",
+    "provider": "OpenAI",
+    "regex": "\\bsk-[a-zA-Z0-9]{20,}T3BlbkFJ[a-zA-Z0-9]{20,}\\b",
+    "flags": "",
+    "confidence": "high",
+    "severity": "critical",
+    "entropyCheck": false
+  },
+  {
+    "id": "slack-bot-token",
+    "name": "Slack Bot Token",
+    "provider": "Slack",
+    "regex": "\\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[0-9a-zA-Z]{24,32}\\b",
+    "flags": "",
+    "confidence": "high",
+    "severity": "high",
+    "entropyCheck": false
+  },
+  {
+    "id": "generic-jwt",
+    "name": "Generic JWT",
+    "provider": "generic",
+    "regex": "\\beyJ[a-zA-Z0-9_-]{10,}\\.eyJ[a-zA-Z0-9_-]{10,}\\.[a-zA-Z0-9_-]{10,}\\b",
+    "flags": "",
+    "confidence": "low",
+    "severity": "medium",
+    "entropyCheck": false
+  },
+  {
+    "id": "generic-high-entropy-secret",
+    "name": "Generic High-Entropy String Assigned to Suspicious Variable",
+    "provider": "generic",
+    "regex": "(api[_-]?key|secret|token|password|passwd|pwd)['\"]?\\s*[:=]\\s*['\"]([a-zA-Z0-9_\\-!@#$%^&*]{16,})['\"]",
+    "flags": "i",
+    "confidence": "low",
+    "severity": "medium",
+    "entropyCheck": true
+  }
+]
