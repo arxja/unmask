@@ -8,7 +8,7 @@ audience: contributor
 
 # The pipeline
 
-Unmask scans for secrets in two stages with very different cost profiles. Understanding why the split exists explains almost every other decision in the codebase.
+Unmask currently scans for secrets in a single detection pass with a different cost profile than later verification work. The architecture is intentionally staged so the current discovery + regex/entropy path is the working implementation, while AST verification and the worker pool remain planned follow-on steps.
 
 ## The problem the split solves
 
@@ -17,29 +17,34 @@ A secret scanner has to satisfy two demands that pull in opposite directions:
 - **Find everything.** A scanner that misses a live AWS key is worse than useless, because it produced false confidence.
 - **Report nothing that isn't real.** A scanner that flags every hash in a lockfile gets uninstalled within a day. Nothing downstream — not the git hook, not the CI gate — survives a noisy tool.
 
-Pattern matching alone satisfies the first and fails the second. A raw entropy threshold alone satisfies neither well. So Unmask runs two passes with different jobs:
+Pattern matching alone satisfies the first and fails the second. A raw entropy threshold alone satisfies neither well. The current implementation is a single detection pass:
 
-**Stage 1 — detection.** Cheap, runs on every file. High recall, knowingly noisy. Regex patterns plus an entropy gate produce _candidates_.
+**Current stage — detection.** Cheap, runs on every file. High recall, knowingly noisy. Regex patterns plus an entropy gate produce _candidates_.
 
-**Stage 2 — verification.** Expensive, runs only on files that produced at least one candidate. Parses the file to an AST, locates the enclosing node of each candidate, and applies false-positive rules — `process.env` references, template-literal placeholders, test and fixture paths, constant aliasing.
+**Planned stage 2 — verification.** Expensive work that will run only on files that produced at least one candidate. It will parse the file to an AST, locate the enclosing node of each candidate, and apply false-positive rules — `process.env` references, template-literal placeholders, test and fixture paths, constant aliasing.
 
-The gate between them is the point: **the expensive work is scoped to files that already look interesting.** A repository where nothing matches pays only the cost of stage 1.
+**Planned stage 3 — worker pool.** Parallel execution for the later staged pipeline once profiling shows it is needed; it is not part of the current implementation.
+
+The gate between the current pass and the future verification step is the point: **the expensive work is scoped to files that already look interesting.** A repository where nothing matches pays only the cost of the current detection pass.
 
 ## Flow
 
 ```text
-file-discovery → [worker pool] → detection (regex) → verification (AST) → finding[] → report
+file-discovery → detection (regex + entropy) → finding[] → report
 ↑
+planned: verification (AST) → worker pool
+
 git/ (staged files, hook)
 ```
 
-| Step            | Cost          | Scope                        | Module                                              |
-| --------------- | ------------- | ---------------------------- | --------------------------------------------------- |
-| 1. Discovery    | Cheap I/O     | Every file in the repo       | `discovery/file-discovery.ts`                       |
-| 2. Detection    | Cheap CPU     | Every file                   | `detection/regex-engine.ts`, `detection/entropy.ts` |
-| 3. Verification | Expensive CPU | Only files with ≥1 candidate | `verification/`                                     |
-| 4. Finding      | —             | Every surviving candidate    | `core/finding.ts`                                   |
-| 5. Report       | Cheap         | Every finding                | `report/`                                           |
+| Step            | Cost                   | Scope                        | Module                                              |
+| --------------- | ---------------------- | ---------------------------- | --------------------------------------------------- |
+| 1. Discovery    | Cheap I/O              | Every file in the repo       | `discovery/file-discovery.ts`                       |
+| 2. Detection    | Cheap CPU              | Every file                   | `detection/regex-engine.ts`, `detection/entropy.ts` |
+| 2. Verification | Planned, expensive CPU | Only files with ≥1 candidate | `verification/`                                     |
+| 3. Worker pool  | Planned parallelism    | Discovery + scan stages      | `core/scheduler.ts` _(planned)_                     |
+| 4. Finding      | —                      | Every surviving candidate    | `core/finding.ts`                                   |
+| 5. Report       | Cheap                  | Every finding                | `report/`                                           |
 
 **Discovery** walks the repo with `fast-glob`, respecting ignore rules, and produces a **list of paths — not contents**. Keeping discovery content-free is what makes it trivially parallelizable later and keeps memory flat on large repos.
 
@@ -76,12 +81,12 @@ These are not style preferences. Breaking either one is a bug in the product, no
 
 The build order is not arbitrary. Each step produces something measurable before the next one adds cost.
 
-| Step | Deliverable                                                      | Why here                                                                                                            |
-| ---- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| 1    | Discovery + regex + naive single-threaded scan                   | A working CLI that finds _something_. Proves the pipeline shape end to end.                                         |
-| 2    | AST false-positive filtering + fixture corpus + `corpus-eval.ts` | The differentiator. The corpus is what turns tuning constants into defensible numbers.                              |
-| 3    | Worker thread pool                                               | **Only after profiling proves detection+verification is CPU-bound on a real repo.** Do not thread before measuring. |
-| 4    | Git hook + GitHub Action                                         | Thin wrappers over `scan-runner.ts`. Nothing new to design; they consume step 1's output.                           |
+| Step | Deliverable                                                      | Why here                                                                                                                     |
+| ---- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| 1    | Discovery + regex + naive single-threaded scan                   | A working CLI that finds _something_. Proves the pipeline shape end to end.                                                  |
+| 2    | AST false-positive filtering + fixture corpus + `corpus-eval.ts` | **Planned.** The differentiator. The corpus is what turns tuning constants into defensible numbers.                          |
+| 3    | Worker thread pool                                               | **Planned.** Only after profiling proves detection+verification is CPU-bound on a real repo. Do not thread before measuring. |
+| 4    | Git hook + GitHub Action                                         | Thin wrappers over `scan-runner.ts`. Nothing new to design; they consume step 1's output.                                    |
 
 Parallelism, when it arrives, applies to steps 2–3 only. Discovery is I/O-bound and does not need threads.
 
