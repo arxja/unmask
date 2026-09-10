@@ -3,8 +3,15 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "bin": {
+    "unmask": "./dist/unmask.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsup",
+    "test": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -19,13 +26,18 @@
   "type": "module",
   "devDependencies": {
     "@types/node": "^26.5.0",
-    "typescript": "^7.0.2"
+    "memfs": "^4.71.0",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
   },
   "dependencies": {
     "acorn": "^8.18.0",
     "chalk": "^6.0.0",
+    "commander": "^15.0.0",
     "fast-glob": "^3.3.3",
     "ora": "^9.4.1",
-    "simple-git": "^3.36.0"
+    "simple-git": "^3.36.0",
+    "unmask": "link:"
   }
 }
