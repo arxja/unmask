@@ -41,6 +41,7 @@ export function discoverFiles(
     "package-lock.json",
     "pnpm-lock.yaml",
     "yarn.lock",
+    ".env*"
   ];
 
   // 2. Merge: user ignore overrides default (user wins)
