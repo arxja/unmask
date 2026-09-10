@@ -9,7 +9,6 @@ program
   .alias("s")
   .description("Scan target directory for secrets")
   .action(async (patterns: string, targetDir: string) => {
-    console.log("hello");
     await scan(patterns, targetDir);
   });
 
