@@ -1,6 +1,10 @@
 import * as fs from "fs";
 import fg from "fast-glob";
-import { loadPatterns, scanContent, type Finding } from "../detection/regex-engine";
+import {
+  loadPatterns,
+  scanContent,
+  type Finding,
+} from "../detection/regex-engine";
 
 export interface DiscoverOptions {
   /**
@@ -41,7 +45,6 @@ export function discoverFiles(
     "package-lock.json",
     "pnpm-lock.yaml",
     "yarn.lock",
-    ".env*"
   ];
 
   // 2. Merge: user ignore overrides default (user wins)
@@ -90,11 +93,21 @@ export function scanForSecrets(
 
   // 3. Scan each file
   for (const file of files) {
+    let content: string;
+
     try {
-      const content = fs.readFileSync(file, "utf-8");
-      findings.push(...scanContent(content, file, patterns));
+      content = fs.readFileSync(file, "utf-8");
     } catch {
-      // Silently skip binary/unreadable files
+      // Silently skip unreadable files.
+      continue;
+    }
+
+    try {
+      findings.push(...scanContent(content, file, patterns));
+    } catch (error) {
+      console.warn(
+        `Skipping ${file}: scan failed (${error instanceof Error ? error.message : String(error)})`,
+      );
     }
   }
 
