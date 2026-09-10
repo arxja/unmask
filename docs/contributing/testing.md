@@ -59,11 +59,11 @@ Anything that reads or writes files goes through `memfs`. This keeps tests herme
 Two files wire this up globally:
 
 ```javascript
-// **mocks**/fs.cjs
+// __mocks__/fs.cjs
 const { fs } = require("memfs");
 module.exports = fs;
 
-// **mocks**/promises.cjs
+// __mocks__/fs/promises.cjs
 const { fs } = require("memfs");
 module.exports = fs.promises;
 ```
@@ -87,7 +87,7 @@ vol.fromJSON({ "/patterns.json": JSON.stringify(patterns) });
 
 ```typescript
 vi.mock("fast-glob", () => ({
-default: { sync: vi.fn().mockReturnValue([]) },
+  default: { sync: vi.fn().mockReturnValue([]) },
 }));
 
 const mockSync = vi.mocked(fg.sync);
@@ -159,12 +159,12 @@ Everything else is best-effort.
 
 Current suite, tracked so they don't quietly persist:
 
-| File                   | Test                                          | Issue                                                                                                                                                                                                                                 |
-| ---------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `regex-engine.test.ts` | `rejects a pattern match with low entropy`    | Input string is 19 characters and doesn't match `AKIA[0-9A-Z]{16}`; the test passes on regex non-match, not entropy rejection. Also blocked on the capture-group contract — the pattern has no group 2, so `entropyCheck` is a no-op. |
-| `entropy.test.ts`      | `rejects two-character alternating patterns`  | `abababababab` is 12 chars; fails at the length gate, never reaches the run-length gate.                                                                                                                                              |
-| `entropy.test.ts`      | `rejects skewed distributions even when long` | Input has a 32-character run; fails at the run-length gate, never reaches entropy density.                                                                                                                                            |
-| `entropy.test.ts`      | `rejects words with only a couple of classes` | `PasswordPassword123` is 19 chars; fails at length, never reaches class diversity.                                                                                                                                                    |
+| File                   | Test                                          | Issue                                                                                                                                                            |
+| ---------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `regex-engine.test.ts` | `rejects a pattern match with low entropy`    | `KEY_ABC_AAAAAAAAAAAAAAA` matches the two-group pattern, but group 2 is only 15 characters long, so it is rejected by the length gate before entropy evaluation. |
+| `entropy.test.ts`      | `rejects two-character alternating patterns`  | `abababababab` is 12 chars; fails at the length gate, never reaches the run-length gate.                                                                         |
+| `entropy.test.ts`      | `rejects skewed distributions even when long` | Input has a 32-character run; fails at the run-length gate, never reaches entropy density.                                                                       |
+| `entropy.test.ts`      | `rejects words with only a couple of classes` | `PasswordPassword123` is 19 chars; fails at length, never reaches class diversity.                                                                               |
 
 None of these are urgent. All of them are the same mistake and worth fixing in one pass when the corpus lands.
 
