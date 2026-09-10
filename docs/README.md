@@ -8,7 +8,7 @@ last_updated: 2026-09-10
 
 > ⚠️ Unmask is under active development. APIs, configuration, and behavior may change without notice. Features marked `experimental` are not production-ready.
 
-Unmask is a Node.js CLI that scans a codebase for hardcoded secrets before they reach Git. Two-stage pipeline: fast regex detection over every file, then AST-based verification only on files with a hit, to cut false positives.
+Unmask is a Node.js CLI that scans a codebase for hardcoded secrets before they reach Git. The current implementation performs discovery and regex/entropy detection over every file. AST-based verification is planned for build-order step 2, and the worker pool is planned for step 3; neither is part of the current scan path.
 
 ## Start here
 
