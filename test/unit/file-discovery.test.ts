@@ -38,6 +38,8 @@ describe("discoverFiles", () => {
         ]),
       }),
     );
+    const [, opts] = lastCall();
+    expect(opts.ignore).not.toContain(".env*");
   });
 
   it("appends user ignore patterns to defaults", () => {

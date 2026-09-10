@@ -25,7 +25,8 @@ describe("scanContent", () => {
 
     expect(findings).toHaveLength(1);
     expect(findings[0].line).toBe(2);
-    expect(findings[0].match).toBe("KEY_ABC_xK9mP2qL8nR4tZ6w");
+    expect(findings[0].match).toBe("[REDACTED]");
+    expect(findings[0].fingerprint).toMatch(/^fp:/);
   });
 
   it("returns empty array when nothing matches", () => {
@@ -41,6 +42,26 @@ describe("scanContent", () => {
       const content = "KEY_ABC_AAAAAAAAAAAAAAA";
       const findings = scanContent(content, "fake.txt", entropyPatterns);
       expect(findings).toHaveLength(0);
+    });
+
+    it("rejects entropy checks when group 2 is missing or empty", () => {
+      const missingGroupPattern = {
+        ...patterns[0],
+        regex: "KEY_([A-Z]+)(?:_([A-Za-z0-9]+))?",
+        entropyCheck: true,
+      };
+      const emptyGroupPattern = {
+        ...patterns[0],
+        regex: "KEY_([A-Z]+)_([A-Za-z0-9]*)",
+        entropyCheck: true,
+      };
+
+      expect(scanContent("KEY_ABC", "fake.txt", [missingGroupPattern])).toEqual(
+        [],
+      );
+      expect(scanContent("KEY_ABC_", "fake.txt", [emptyGroupPattern])).toEqual(
+        [],
+      );
     });
 
     it("accepts a match whose group-2 content has high entropy", () => {
@@ -63,6 +84,16 @@ describe("loadPatterns", () => {
     const result = loadPatterns("/patterns.json");
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe("test-key");
+  });
+
+  it("rejects malformed pattern payloads", () => {
+    vol.fromJSON({
+      "/bad-patterns.json": JSON.stringify([{ id: "missing-fields" }]),
+    });
+
+    expect(() => loadPatterns("/bad-patterns.json")).toThrow(
+      /Pattern.*invalid|valid Pattern/,
+    );
   });
 
   it("throws when the file is missing", () => {
