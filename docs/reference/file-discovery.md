@@ -155,7 +155,7 @@ Usually harmless (garbage rarely matches a secret pattern) but not free, and the
 | 9   | `options.absolute !== undefined ? … : true` and `dot                                                                                                                                                                                                         |              | false`are`??` in disguise    | Low | `discoverFiles` |
 | 10  | `new RegExp` per pattern per file remains                                                                                                                                                                                                                    | Low          | inherited from `scanContent` |
 
-**On #1:** if this is intentional — say, on the theory that `.env` should always be gitignored and therefore never staged — then it needs to be stated, because the git hook scans _staged_ files and `.env` is precisely what people accidentally `git add -f`. Given the project's stated purpose, this default should probably be inverted for the git-hook path specifically: scan whatever is staged, ignore the discovery defaults entirely.
+**Corrected default behavior:** `.env` files are no longer excluded by the built-in discovery ignore list. When `dot: true` is enabled, `scanForSecrets` can inspect `.env` files as part of the repository scan. The default discovery policy is therefore aligned with the project’s stated purpose rather than with a hardcoded `.env` exemption.
 
 ## Open questions
 
