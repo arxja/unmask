@@ -52,8 +52,7 @@ If you're unsure: ask what the reader is trying to do. _Understand_ → concepts
 
 Every doc opens with YAML frontmatter. Missing fields break navigation and status tracking.
 
-## ```yaml
-
+```yaml
 title: Regex detection engine # required — matches the H1
 status: experimental # required — draft | experimental | stable | deprecated
 last_updated: 2026-09-10 # required — ISO date, update on every edit
@@ -61,10 +60,8 @@ audience: contributor # required — contributor | user | admin
 since: unreleased # optional — version this describes
 source: src/detection/regex-engine.ts # optional — the code this documents
 depends_on: src/detection/entropy.ts # optional — modules this doc assumes
-
 ---
-
-````
+```
 
 | Field                  | Meaning                                                                                                                    |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -89,7 +86,7 @@ Is this "how do I use it" for someone who isn't modifying the source?
 Is this "how does it work / why is it built this way"?
 ├─ the mental model, no API → concepts/
 └─ the module's exact behavior → reference/
-````
+```
 
 **Don't split a module's docs across concepts/ and reference/ until it's earned.** A single doc in `reference/` with a conceptual preamble is correct for a module with one implementation. Split when a second implementation exists, or when the concept applies to more than one module — that's when the concept has independent value.
 
