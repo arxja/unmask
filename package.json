@@ -37,7 +37,6 @@
     "commander": "^15.0.0",
     "fast-glob": "^3.3.3",
     "ora": "^9.4.1",
-    "simple-git": "^3.36.0",
-    "unmask": "link:"
+    "simple-git": "^3.36.0"
   }
 }

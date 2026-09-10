@@ -203,9 +203,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  unmask: 'link:'
-
 importers:
 
   .:
@@ -228,9 +225,6 @@ importers:
       simple-git:
         specifier: ^3.36.0
         version: 3.36.0
-      unmask:
-        specifier: 'link:'
-        version: 'link:'
     devDependencies:
       '@types/node':
         specifier: ^26.5.0
