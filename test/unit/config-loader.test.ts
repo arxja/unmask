@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cosmiconfig } from "cosmiconfig";
 import { configLoader } from "../../src/config/load-config";
 import { ConfigSchema } from "../../src/config/schema";
@@ -19,6 +19,10 @@ describe("configLoader", () => {
     vi.clearAllMocks();
     // silence the console.error inside the catch block
     vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("returns schema defaults when no config file is found", async () => {
