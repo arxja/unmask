@@ -35,11 +35,14 @@ function makeAnsi(enabled: boolean): Ansi {
   };
 }
 
-function decideColor(force?: boolean): boolean {
+function decideColor(
+  force: boolean | undefined,
+  stream: NodeJS.WritableStream,
+): boolean {
   if (force !== undefined) return force;
   if (process.env.NO_COLOR) return false;
   if (process.env.FORCE_COLOR === "1") return true;
-  return Boolean(process.stdout.isTTY);
+  return "isTTY" in stream && stream.isTTY === true;
 }
 
 function severityColor(sev: Severity, c: Ansi) {
@@ -76,7 +79,7 @@ export class TerminalReporter implements Reporter {
 
   constructor(opts: TerminalReporterOptions = {}) {
     this.stream = opts.stream ?? process.stdout;
-    this.color = decideColor(opts.color);
+    this.color = decideColor(opts.color, this.stream);
     this.maxFindings = opts.maxFindings ?? 50;
     this.verbose = opts.verbose ?? false;
   }
