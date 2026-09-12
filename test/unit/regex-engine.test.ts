@@ -5,6 +5,7 @@ import {
   loadPatterns,
   type Pattern,
 } from "../../src/detection/regex-engine";
+import { JsonReporter } from "../../src/report/json-reporter";
 
 vi.mock("node:fs");
 vi.mock("node:fs/promises");
@@ -53,6 +54,33 @@ describe("scanContent", () => {
 
     expect(a.fingerprint).toBe(b.fingerprint);
     expect(a.masked).toBe(b.masked);
+  });
+
+  it("redacts every detected secret on the same line before storing context", () => {
+    const multiPattern = [
+      {
+        ...patterns[0],
+        id: "token",
+        name: "Token",
+        regex: "TOKEN=([A-Za-z0-9]+)",
+      },
+      {
+        ...patterns[0],
+        id: "key",
+        name: "Key",
+        regex: "KEY_([A-Z]+)_([A-Za-z0-9]+)",
+      },
+    ];
+
+    const content = "TOKEN=abc12345 KEY_ABC_xK9mP2qL8nR4tZ6w";
+    const findings = scanContent(content, "fake.txt", multiPattern);
+
+    expect(findings).toHaveLength(2);
+    for (const finding of findings) {
+      expect(finding.context?.[0]).not.toContain("abc12345");
+      expect(finding.context?.[0]).not.toContain("xK9mP2qL8nR4tZ6w");
+      expect(finding.context?.[0]).toContain("•");
+    }
   });
 
   it("returns an empty array when nothing matches", () => {
@@ -117,6 +145,60 @@ describe("scanContent", () => {
       const findings = scanContent(content, "fake.txt", entropyPatterns);
       expect(findings).toHaveLength(1);
     });
+  });
+});
+
+describe("JsonReporter", () => {
+  it("omits fingerprint from serialized findings and sorts a copy of findings", () => {
+    const original = [
+      {
+        patternId: "low",
+        patternName: "Low",
+        provider: "test",
+        severity: "low",
+        confidence: "high",
+        file: "z.ts",
+        line: 2,
+        column: 1,
+        masked: "zz••••••••zz",
+        fingerprint: "fffaaa111bbb",
+        context: ["z"],
+      },
+      {
+        patternId: "crit",
+        patternName: "Critical",
+        provider: "test",
+        severity: "critical",
+        confidence: "high",
+        file: "a.ts",
+        line: 1,
+        column: 1,
+        masked: "aa••••••••aa",
+        fingerprint: "aaa111bbb222",
+        context: ["a"],
+      },
+    ] as const;
+
+    const stream = { write: vi.fn() };
+    const reporter = new JsonReporter({ pretty: false, stream: stream as any });
+
+    reporter.report({
+      findings: [...original],
+      filesScanned: 2,
+      durationMs: 4,
+      rootDir: ".",
+      version: "1.0.0",
+    });
+
+    const payload = JSON.parse(stream.write.mock.calls[0][0]);
+
+    expect(payload.findings.map((f: { file: string }) => f.file)).toEqual([
+      "a.ts",
+      "z.ts",
+    ]);
+    expect(payload.findings[0]).not.toHaveProperty("fingerprint");
+    expect(payload.findings[1]).not.toHaveProperty("fingerprint");
+    expect(original.map((f) => f.file)).toEqual(["z.ts", "a.ts"]);
   });
 });
 
