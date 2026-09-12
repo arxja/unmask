@@ -132,6 +132,8 @@ export function scanContent(
 ): Finding[] {
   const findings: Finding[] = [];
   const lines = content.split("\n");
+  const lineSecrets = new Map<number, Set<string>>();
+  const lineFindingIndexes = new Map<number, number[]>();
 
   for (const pattern of patterns) {
     const flags = pattern.flags.includes("g")
@@ -156,20 +158,41 @@ export function scanContent(
           continue;
         }
 
-        findings.push({
-          patternId: pattern.id,
-          patternName: pattern.name,
-          provider: pattern.provider,
-          severity: pattern.severity,
-          confidence: pattern.confidence,
-          file: filePath,
-          line: i + 1,
-          column: match.index + 1,
-          fingerprint: fingerprint(secret),
-          masked: redact(secret),
-          context: [redactLine(line, secret).trim()],
-        });
+        if (!lineSecrets.has(i)) {
+          lineSecrets.set(i, new Set());
+        }
+        lineSecrets.get(i)!.add(secret);
+
+        const findingIndex =
+          findings.push({
+            patternId: pattern.id,
+            patternName: pattern.name,
+            provider: pattern.provider,
+            severity: pattern.severity,
+            confidence: pattern.confidence,
+            file: filePath,
+            line: i + 1,
+            column: match.index + 1,
+            fingerprint: fingerprint(secret),
+            masked: redact(secret),
+          }) - 1;
+
+        if (!lineFindingIndexes.has(i)) {
+          lineFindingIndexes.set(i, []);
+        }
+        lineFindingIndexes.get(i)!.push(findingIndex);
       }
+    }
+  }
+
+  for (const [lineNumber, secrets] of lineSecrets) {
+    const redactedLine = Array.from(secrets).reduce(
+      (current, secret) => redactLine(current, secret),
+      lines[lineNumber],
+    );
+
+    for (const findingIndex of lineFindingIndexes.get(lineNumber) ?? []) {
+      findings[findingIndex].context = [redactedLine.trim()];
     }
   }
 
