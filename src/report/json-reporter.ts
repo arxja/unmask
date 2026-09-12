@@ -1,5 +1,10 @@
 import { writeFileSync } from "node:fs";
-import type { Reporter, ScanResult, Finding } from "../core/finding";
+import {
+  compareFindings,
+  type Reporter,
+  type ScanResult,
+  type Finding,
+} from "../core/finding";
 
 const SCHEMA_VERSION = 1;
 
@@ -45,6 +50,8 @@ export class JsonReporter implements Reporter {
       unique.add(f.fingerprint);
     }
 
+    const orderedFindings = [...result.findings].sort(compareFindings);
+
     return {
       schemaVersion: SCHEMA_VERSION,
       tool: { name: "secret-detector", version: result.version },
@@ -57,7 +64,7 @@ export class JsonReporter implements Reporter {
         uniqueSecrets: unique.size,
         bySeverity,
       },
-      findings: result.findings.map(serializeFinding),
+      findings: orderedFindings.map(serializeFinding),
     };
   }
 }
@@ -78,7 +85,6 @@ function serializeFinding(f: Finding) {
     line: f.line,
     column: f.column,
     masked: f.masked,
-    fingerprint: f.fingerprint,
     context: f.context,
   };
 }
