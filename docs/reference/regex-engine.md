@@ -94,7 +94,7 @@ Returns the first 12 hex characters of the SHA-256 digest of `secret`, encoded U
 
 **What it is for.** Stable identification of a secret across files. Two findings with the same fingerprint are treated by consumers as the same secret. Baseline files will store fingerprints to silence known findings without storing the values themselves.
 
-**Why SHA-256 and not a 32-bit hash.** An earlier version used `hash * 31 + charCode`, which is not collision-resistant. At ten thousand findings, the birthday bound makes a collision likely, and a collision produces a **false claim that two different secrets are the same secret** — a security-relevant lie that a fingerprint-based baseline would act on. 48 bits of SHA-256 makes this impossible in practice.
+**Why SHA-256 and not a 32-bit hash.** An earlier version used `hash * 31 + charCode`, which is not collision-resistant. At ten thousand findings, the birthday bound makes a collision about 1.2% (non-negligible) the 50% birthday-bound point is about 77,000 inputs. and a collision produces a **false claim that two different secrets are the same secret** — a security-relevant lie that a fingerprint-based baseline would act on. 48 bits of SHA-256 makes this impossible in practice.
 
 **Why truncation is safe.** The fingerprint is a deduplication key, not a secret store. Someone who has the fingerprint but not the secret learns nothing usable — brute-forcing a 48-bit space over real secret entropy is infeasible, and the goal is not to protect the fingerprint itself. If a future feature ever treats fingerprints as sensitive, this decision needs revisiting.
 
