@@ -1,5 +1,14 @@
-import * as fs from "fs";
-import { hasHighEntropy } from "../detection/entropy";
+import * as fs from "node:fs";
+import { createHash } from "node:crypto";
+import { hasHighEntropy } from "./entropy";
+import { redact, redactLine } from "../report/redact";
+import {
+  type Confidence,
+  type Finding,
+  type Severity,
+  isConfidence,
+  isSeverity,
+} from "../core/finding";
 
 export interface Pattern {
   id: string;
@@ -7,22 +16,9 @@ export interface Pattern {
   provider: string;
   regex: string;
   flags: string;
-  confidence: string;
-  severity: string;
+  confidence: Confidence;
+  severity: Severity;
   entropyCheck: boolean;
-}
-
-export interface Finding {
-  patternId: string;
-  patternName: string;
-  provider: string;
-  severity: string;
-  file: string;
-  line: number;
-  offset: number;
-  fingerprint: string;
-  match: string;
-  context: string;
 }
 
 const REQUIRED_PATTERN_FIELDS = [
@@ -40,7 +36,6 @@ function isPattern(value: unknown): value is Pattern {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-
   const record = value as Record<string, unknown>;
   return (
     REQUIRED_PATTERN_FIELDS.every((field) => field in record) &&
@@ -49,58 +44,86 @@ function isPattern(value: unknown): value is Pattern {
     typeof record.provider === "string" &&
     typeof record.regex === "string" &&
     typeof record.flags === "string" &&
-    typeof record.confidence === "string" &&
-    typeof record.severity === "string" &&
+    isConfidence(record.confidence) &&
+    isSeverity(record.severity) &&
     typeof record.entropyCheck === "boolean"
   );
 }
 
-function redact(value: string): string {
-  return value.length ? "[REDACTED]" : "";
-}
-
-function fingerprint(value: string): string {
-  let hash = 0;
-  for (let i = 0; i < value.length; i++) {
-    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+/**
+ * The last non-empty capture group is the secret. If the regex has no
+ * capture groups, the whole match is treated as the secret.
+ *
+ * Pattern authors must use (?:...) for grouping they don't want treated
+ * as the secret.
+ */
+export function extractSecret(match: RegExpExecArray): string {
+  if (match.length <= 1) return match[0];
+  for (let i = match.length - 1; i >= 1; i--) {
+    const g = match[i];
+    if (g !== undefined && g !== "") return g;
   }
-  return `fp:${hash.toString(16).padStart(8, "0")}`;
+  return match[0];
 }
 
 /**
- * Load and parse regex patterns from a JSON file.
+ * Stable identifier for a secret, used for cross-file dedup and (later)
+ * baseline files. SHA-256 truncated to 48 bits — collision-safe at tool
+ * scale, and fast enough to call per finding.
+ */
+export function fingerprint(secret: string): string {
+  return createHash("sha256").update(secret, "utf8").digest("hex").slice(0, 12);
+}
+
+/**
+ * Load and validate patterns from a JSON file.
+ * Fails loudly on the first invalid pattern — including patterns whose
+ * regex does not compile, so we never discover that mid-scan.
  */
 export function loadPatterns(patternFile: string): Pattern[] {
+  let parsed: unknown;
   try {
-    const content = fs.readFileSync(patternFile, "utf-8");
-    const parsed = JSON.parse(content);
+    parsed = JSON.parse(fs.readFileSync(patternFile, "utf-8"));
+  } catch (error) {
+    throw new Error(`Failed to load patterns from ${patternFile}: ${error}`);
+  }
 
-    if (!Array.isArray(parsed)) {
+  if (!Array.isArray(parsed)) {
+    throw new Error(
+      "Patterns file must contain a JSON array of Pattern objects.",
+    );
+  }
+
+  for (const [index, item] of parsed.entries()) {
+    if (!isPattern(item)) {
       throw new Error(
-        "Patterns file must contain a JSON array of Pattern objects.",
+        `Invalid Pattern at index ${index} in ${patternFile}: ` +
+          `expected a valid Pattern object with all required fields and correct types.`,
       );
     }
 
-    for (const [index, item] of parsed.entries()) {
-      if (!isPattern(item)) {
-        throw new Error(
-          `Invalid Pattern at index ${index} in ${patternFile}: expected a valid Pattern object with all required fields and correct types.`,
-        );
-      }
+    // Validate that the regex compiles with the same flags the scanner
+    // will use. `g` is forced on so validation matches runtime behavior.
+    const flags = item.flags.includes("g") ? item.flags : `${item.flags}g`;
+    try {
+      new RegExp(item.regex, flags);
+    } catch (error) {
+      throw new Error(
+        `Invalid Pattern at index ${index} in ${patternFile}: ` +
+          `regex failed to compile — ${(error as Error).message}`,
+      );
     }
-
-    return parsed;
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Invalid Pattern")) {
-      throw error;
-    }
-    throw new Error(`Failed to load patterns from ${patternFile}: ${error}`);
   }
+
+  return parsed;
 }
 
 /**
- * Scan a single file's content for secret patterns.
- * Returns findings with line numbers relative to the given content.
+ * Scan one file's content.
+ *
+ * Caller contract: `filePath` must already be relative to the scan's
+ * rootDir. Normalization happens in core/scan-runner, not here, so this
+ * function stays pure and easy to test.
  */
 export function scanContent(
   content: string,
@@ -109,10 +132,13 @@ export function scanContent(
 ): Finding[] {
   const findings: Finding[] = [];
   const lines = content.split("\n");
+  const lineSecrets = new Map<number, Set<string>>();
+  const lineFindingIndexes = new Map<number, number[]>();
 
   for (const pattern of patterns) {
-    let flags = pattern.flags || "";
-    if (!flags.includes("g")) flags += "g";
+    const flags = pattern.flags.includes("g")
+      ? pattern.flags
+      : `${pattern.flags}g`;
     const regex = new RegExp(pattern.regex, flags);
 
     for (let i = 0; i < lines.length; i++) {
@@ -121,44 +147,52 @@ export function scanContent(
       let match: RegExpExecArray | null;
 
       while ((match = regex.exec(line)) !== null) {
-        // Safety: avoid infinite loop on zero-length matches
-        if (match.index === regex.lastIndex) {
+        if (match[0].length === 0) {
           regex.lastIndex++;
+          continue;
         }
 
-        // Entropy check
-        if (pattern.entropyCheck) {
-          const candidate = match[2];
-          if (
-            candidate === undefined ||
-            candidate === "" ||
-            candidate === null
-          ) {
-            continue;
-          }
-          if (!hasHighEntropy(candidate)) {
-            continue;
-          }
+        const secret = extractSecret(match);
+
+        if (pattern.entropyCheck && !hasHighEntropy(secret)) {
+          continue;
         }
 
-        const rawMatch = match[0];
-        const safeContext = line.trim();
-        const redactedMatch = redact(rawMatch);
-        findings.push({
-          patternId: pattern.id,
-          patternName: pattern.name,
-          provider: pattern.provider,
-          severity: pattern.severity,
-          file: filePath,
-          line: i + 1,
-          offset: match.index,
-          fingerprint: fingerprint(rawMatch),
-          match: redactedMatch,
-          context: safeContext.includes(rawMatch)
-            ? safeContext.split(rawMatch).join(redactedMatch)
-            : redact(safeContext),
-        });
+        if (!lineSecrets.has(i)) {
+          lineSecrets.set(i, new Set());
+        }
+        lineSecrets.get(i)!.add(secret);
+
+        const findingIndex =
+          findings.push({
+            patternId: pattern.id,
+            patternName: pattern.name,
+            provider: pattern.provider,
+            severity: pattern.severity,
+            confidence: pattern.confidence,
+            file: filePath,
+            line: i + 1,
+            column: match.index + 1,
+            fingerprint: fingerprint(secret),
+            masked: redact(secret),
+          }) - 1;
+
+        if (!lineFindingIndexes.has(i)) {
+          lineFindingIndexes.set(i, []);
+        }
+        lineFindingIndexes.get(i)!.push(findingIndex);
       }
+    }
+  }
+
+  for (const [lineNumber, secrets] of lineSecrets) {
+    const redactedLine = Array.from(secrets).reduce(
+      (current, secret) => redactLine(current, secret),
+      lines[lineNumber],
+    );
+
+    for (const findingIndex of lineFindingIndexes.get(lineNumber) ?? []) {
+      findings[findingIndex].context = [redactedLine.trim()];
     }
   }
 

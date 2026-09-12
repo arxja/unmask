@@ -2,10 +2,10 @@
 title: Regex detection engine
 status: experimental
 since: unreleased
-last_updated: 2026-09-10
+last_updated: 2026-09-12
 audience: contributor
 source: src/detection/regex-engine.ts
-depends_on: src/detection/entropy.ts
+depends_on: src/detection/entropy.ts, src/core/finding.ts, src/report/redact.ts
 ---
 
 # Regex detection engine
@@ -14,37 +14,93 @@ Stage 1 of the pipeline. Runs every compiled pattern against every line of a fil
 
 See [entropy-based detection](../concepts/entropy.md) for the gate chain this module calls into, and [the pipeline](../concepts/pipeline.md) for where this fits.
 
-## The capture-group contract
+## The secret-extraction contract
 
-**This is the most important thing on this page and it is currently enforced only by convention.**
+**This is the most important thing on this page. It governs what gets entropy-checked, what gets fingerprinted, and what gets masked — three things a pattern author cannot see failing.**
 
-When a pattern sets `entropyCheck: true`, the engine runs the entropy gate against **`match[2]` — the second capture group**, not the full match and not group 1.
+The engine does not assume a specific capture-group index. It calls `extractSecret(match)`, which returns:
+
+1. The **last non-empty capture group**, if the regex has any capture groups.
+2. `match[0]` (the full match) if the regex has no capture groups, or if every capture group is `undefined` or the empty string.
 
 ```typescript
-if (pattern.entropyCheck && match[2]) {
-  if (!hasHighEntropy(match[2])) {
-    continue;
+export function extractSecret(match: RegExpExecArray): string {
+  if (match.length <= 1) return match[0];
+  for (let i = match.length - 1; i >= 1; i--) {
+    const g = match[i];
+    if (g !== undefined && g !== "") return g;
   }
+  return match[0];
 }
 ```
 
-The intent is clear: group 1 captures a prefix or delimiter, group 2 captures the secret value itself, and entropy is measured on the value rather than on the provider prefix. `match[0]` — the full match, including the prefix — would score differently and defeat the purpose.
+The extracted secret is what `hasHighEntropy` receives, what `fingerprint` hashes, and what `redact` masks. `match[0]` — the full match including prefixes and delimiters — is never used for any of those three purposes.
 
-Three consequences follow, and none of them are currently enforced or documented in the pattern registry:
+### Why the last group, and not a fixed index
 
-| Situation                                                 | Behavior                                                                                                                                      |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pattern has `< 2` capture groups and `entropyCheck: true` | `match[2]` is `undefined` → the `&&` short-circuits → **entropy is silently skipped**. The pattern behaves as if `entropyCheck` were `false`. |
-| Pattern's group 2 captures fewer than 20 characters       | `hasHighEntropy` fails gate 1 unconditionally → **the pattern never produces a finding**. Silently dead.                                      |
-| Pattern's group 2 is well-formed                          | Entropy runs as intended.                                                                                                                     |
+An earlier version of this module read `match[2]` directly. That worked for one pattern and silently misbehaved for every other:
 
-Both failure modes are silent. Nothing logs, nothing throws, and the pattern registry has no way to express "this pattern requires a group-2 capture of at least 20 characters." A malformed pattern entry looks identical to a working one until someone notices a secret it should have caught.
+| Pattern shape                             | What `match[2]` did before             | What `extractSecret` does now |
+| ----------------------------------------- | -------------------------------------- | ----------------------------- |
+| `AKIA[0-9A-Z]{16}` (zero groups)          | `undefined` → entropy silently skipped | Whole match — correct         |
+| `(AKIA[0-9A-Z]{16})` (one group)          | `undefined` → entropy silently skipped | Group 1 — correct             |
+| `(prefix)(secret)` (two groups)           | Group 2 — correct                      | Group 2 — correct             |
+| `(prefix)(secret)(?:suffix)` (two groups) | Group 2 — correct                      | Group 2 — correct             |
+| `(prefix)(mid)(secret)` (three groups)    | Wrong group                            | Group 3 — correct             |
 
-**Recommended fix (not yet implemented):** validate at load time in `loadPatterns` — if `entropyCheck` is true, assert that the compiled regex has at least two capture groups, and warn or throw otherwise. This turns a silent failure into a startup error. Tracked in Open Questions.
+The rule is simpler to state than a fixed index: **pattern authors put the secret last, and use `(?:…)` for everything that is not the secret.** A pattern that violates this convention is a bug in the pattern registry, not in the engine.
+
+### The one way to get it wrong
+
+A pattern with a **trailing capture group that can match a delimiter** will have that delimiter treated as the secret:
+
+```regex
+key\s*=\s*['"]([A-Za-z0-9]{16,})(['"]?)
+```
+
+If the closing quote is present, the last non-empty group is the quote, and entropy runs against a single character. The correct form uses a non-capturing group:
+
+```regex
+key\s*=\s*['"]([A-Za-z0-9]{16,})(?:['"]?)
+```
+
+**This failure is silent.** A pattern with a delimiter-catching trailing group produces zero findings — the same output as a pattern that matches nothing. Nothing logs, nothing throws. When you add a pattern, walk its capture groups by hand and confirm the last one is the value you intend to detect.
+
+### Load-time validation — what is and is not checked
+
+`loadPatterns` validates that each entry's regex **compiles**, using the same flags the scanner will use. That catches `([A-Z]+` (unbalanced paren) and `a{2,1}` (invalid quantifier) at startup, before any file is read.
+
+It does **not** validate the capture-group contract. A pattern with `entropyCheck: true` and a single non-secret capture group loads and runs, and the entropy gate evaluates the wrong string. Whether to reject this at load time is an open question — see below.
+
+## `extractSecret` — reference
+
+```ts
+export function extractSecret(match: RegExpExecArray): string;
+```
+
+**Input.** A `RegExpExecArray` — the result of `RegExp.prototype.exec` on a `g`\-flagged regex. `match[0]` is the full match; `match[1..n]` are capture groups, each `undefined` if the group did not participate in the match. `match.index` is the 0-based start offset.
+
+**Output.** The last non-empty capture group, or `match[0]` if there are none. Never returns `undefined`; never returns `""` unless the whole match is empty (which `scanContent` guards against before calling).
+
+**Why it lives here, not in `core/`:** the extraction rule is a property of the pattern format, and the pattern format is defined by this module. If a second detection stage ever needs the same rule, move it then.
+
+## `fingerprint` — reference
+
+```ts
+export function fingerprint(secret: string): string;
+```
+
+Returns the first 12 hex characters of the SHA-256 digest of `secret`, encoded UTF-8.
+
+**What it is for.** Stable identification of a secret across files. Two findings with the same fingerprint are treated by consumers as the same secret. Baseline files will store fingerprints to silence known findings without storing the values themselves.
+
+**Why SHA-256 and not a 32-bit hash.** An earlier version used `hash * 31 + charCode`, which is not collision-resistant. At ten thousand findings, the birthday bound makes a collision about 1.2% (non-negligible) the 50% birthday-bound point is about 77,000 inputs. and a collision produces a **false claim that two different secrets are the same secret** — a security-relevant lie that a fingerprint-based baseline would act on. 48 bits of SHA-256 makes this impossible in practice.
+
+**Why truncation is safe.** The fingerprint is a deduplication key, not a secret store. Someone who has the fingerprint but not the secret learns nothing usable — brute-forcing a 48-bit space over real secret entropy is infeasible, and the goal is not to protect the fingerprint itself. If a future feature ever treats fingerprints as sensitive, this decision needs revisiting.
 
 ## `scanContent` — walkthrough
 
-```typescript
+```ts
 export function scanContent(
   content: string,
   filePath: string,
@@ -54,132 +110,146 @@ export function scanContent(
 
 Takes the full file contents as a string. Splits on `\n` and iterates **pattern-outer, line-inner**.
 
+**Caller contract.** `filePath` must already be relative to the scan's `rootDir`. Normalization is the scan-runner's job, not this module's, so `scanContent` stays a pure function of its inputs.
+
 ### Line splitting
 
-`content.split("\n")` — LF only. Files with CRLF line endings will retain a trailing `\r` on every line. This affects `context` (`line.trim()` removes it) but not `line` numbering, so it is currently benign. Worth normalizing explicitly if Windows is a supported target.
+`content.split("\n")` — LF only. Files with CRLF line endings retain a trailing `\r` on every line. This does not affect `line` numbering or `column`, and the `\r` is stripped by the `.trim()` in the context construction. Normalizing explicitly is a low-priority cleanup.
 
 ### Global flag enforcement
 
-```typescript
-let flags = pattern.flags || "";
-if (!flags.includes("g")) flags += "g";
+```ts
+const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
 ```
 
-The `g` flag is forced because the match loop relies on `regex.exec` advancing through the line. A pattern authored without `g` still works — the engine repairs it.
-
-Note the interaction with a user-supplied `flags` string containing `g` elsewhere in a multi-char flag sequence (e.g. `"gi"` vs `"ig"`): `includes("g")` is correct in both cases, so this is safe. A flags string containing something like `"sg"` would also pass, which is fine.
+The `g` flag is required for the match loop, which relies on `regex.exec` advancing through the line. A pattern authored without `g` still works — the engine repairs it. `includes("g")` is correct for `"gi"`, `"ig"`, and `"sg"` — flag order is irrelevant and extra flags pass through unchanged.
 
 ### Match loop and the zero-length guard
 
-```typescript
+```ts
 regex.lastIndex = 0;
 while ((match = regex.exec(line)) !== null) {
-  if (match.index === regex.lastIndex) {
+  if (match[0].length === 0) {
     regex.lastIndex++;
+    continue;
   }
   // ...
 }
 ```
 
-`lastIndex` is reset per line, which is required — a `g`-flagged regex carries state across `exec` calls, and a partial match at end-of-line would otherwise corrupt the start position for the next line.
+`lastIndex` is reset per line. A `g`\-flagged regex carries state across `exec` calls, and a partial match at end-of-line would otherwise corrupt the start position for the next line.
 
-The zero-length guard prevents an infinite loop if a pattern can match the empty string (e.g. `(?:x)?`, or a quantifier like `a*` at a position where it matches nothing). Without it, `exec` returns a zero-length match at the same index forever. Correct and necessary.
+The zero-length guard prevents an infinite loop when a pattern can match the empty string (e.g. `(?:x)?`, or `a*` at a position where it matches nothing). Without it, `exec` returns a zero-length match at the same index indefinitely. The guard advances `lastIndex` and skips the iteration before any finding is constructed — an empty match is never a finding.
 
 ### Entropy gate
 
-Runs before the `Finding` is constructed, so rejected candidates never allocate. Ordering is right.
+Runs on the extracted secret, before the `Finding` is constructed. Rejected candidates never allocate.
+
+```typescript
+const secret \= extractSecret(match);
+if (pattern.entropyCheck && !hasHighEntropy(secret)) {
+continue;
+}
+```
+
+A pattern with `entropyCheck: true` whose extracted secret is shorter than `entropy.minLength` (default 20) produces zero findings. This is not a bug — it is the gate working as designed — but it means a pattern author who expects a 16-character secret to be caught will see nothing and no error. **The pattern registry has no way to express "this secret is expected to be shorter than 20 characters";** if a legitimate short secret needs detection, `entropyCheck` must be `false` on that pattern.
 
 ### Finding construction
 
 ```typescript
 findings.push({
-  patternId: pattern.id,
-  patternName: pattern.name,
-  provider: pattern.provider,
-  severity: pattern.severity,
-  file: filePath,
-  line: i + 1,
-  match: match[0],
-  context: line.trim(),
+patternId: pattern.id,
+patternName: pattern.name,
+provider: pattern.provider,
+severity: pattern.severity,
+confidence: pattern.confidence,
+file: filePath,
+line: i + 1,
+column: match.index + 1,
+fingerprint: fingerprint(secret),
+masked: redact(secret),
+context: \[redactLine(line, secret).trim()\],
 });
 ```
 
-- `line` is 1-indexed (`i + 1`), matching editor conventions.
-- `match` holds **the full match, including the prefix** — deliberately different from the string entropy was measured on. A finding for an AWS key therefore contains `AKIA…`, not just the 16 random characters. This is the right choice for human readability and the wrong choice for anything that logs the finding verbatim. See Redaction below.
-- `context` is the trimmed line. Trimming removes leading indentation, so two structurally identical lines at different nesting depths produce identical `context` values. Fine for display; not a stable identifier.
-- **The raw secret is stored in plaintext on the `Finding` object.** Redaction is a downstream pass in `report/redact.ts`, consistent with the README. This means every `Finding` in memory — and anything that serializes one before redaction runs — contains the live secret.
+Every field that could carry a secret value is derived from the extracted secret and passed through `report/redact.ts`:
+
+- `masked` is `redact(secret)` — the fixed-width mask, never the raw value. **The raw secret is not stored on the `Finding`.** This is a deliberate change from earlier versions and it is what makes the finding safe to serialize, log, or hand to any reporter without a second redaction pass.
+- `fingerprint` is SHA-256 of `secret`, not of `match[0]`. The same secret captured under different variable names produces the same fingerprint.
+- `context` is `redactLine(line, secret).trim()`. The raw line is scrubbed of the secret before trimming, so a context line can never contain the value even when the source line does. A one-element array today; the shape is `string[]` so a future verification pass can append enclosing-statement context without changing consumers.
+- `line` is 1-based (`i + 1`), matching editor conventions.
+- `column` is 1-based (`match.index + 1`), matching editor conventions. It is the column of the match start within the line, not within the file.
+
+### Returned `Finding` shape
+
+Defined in `src/core/finding.ts`, imported here. The engine is a producer of findings; it does not own their shape. See `core/finding.md` _(planned)_ for the canonical definition and the ordering comparators reporters use.
 
 ## `loadPatterns`
 
 ```typescript
-const content = fs.readFileSync(patternFile, "utf-8");
-return JSON.parse(content) as Pattern[];
+export function loadPatterns(patternFile: string): Pattern\[\];
 ```
 
-Reads synchronously and casts the parse result to `Pattern[]`.
+Reads the JSON pattern registry, validates each entry structurally, and verifies that every `regex` compiles under the flags the scanner will use. Throws on the first invalid entry with the index and the reason.
 
-**The cast is not validation.** `JSON.parse` returns `any`; the `as Pattern[]` assertion tells TypeScript to stop checking. A registry entry missing `regex`, or with `flags` as a number, or with `entropyCheck` as the string `"true"`, will load without complaint and fail at match time — or fail silently, per the capture-group contract above.
+### Validation is two-phase
 
-The README's TypeScript notes call for typing at the load boundary:
+**Phase 1 — structural.** `isPattern` checks that every required field is present and has the right primitive type. `severity` and `confidence` are validated against the closed unions exported by `core/finding.ts` (`isSeverity`, `isConfidence`), not merely checked for being strings. A registry entry with `severity: "sev:crit"` is rejected at load.
 
-> `patterns.json` stays plain JSON, not authored in TS — it's static data. Type it at the load boundary: `const patterns: Pattern[] = loadPatterns()`.
+**Phase 2 — regex compilation.** The pattern's regex is compiled once with the `g` flag forced, and the result is discarded. This is a parse check, not a use — it catches malformed regexes before any file is read. Without it, an invalid pattern only fails on the first matching attempt, potentially hundreds of files into a scan.
 
-That annotation is satisfied, but the _runtime_ boundary is not. `loadPatterns` is where schema validation belongs — either hand-rolled field checks or a schema library. Until then, `patterns.json` is trusted input, which is a problem because it is a file contributors are expected to edit.
+### What is still not validated
 
-Errors are wrapped with the file path, which is good. Note the `catch (error)` binding is `unknown` under `strict`, so the template literal relies on `Error`'s `toString`. That works but won't surface a stack or a cause chain.
+- **Capture-group count** relative to `entropyCheck`. See the extraction contract above.
+- **Provider-to-pattern-ID consistency.** Nothing checks that a pattern with `provider: "aws"` follows AWS's format.
+- **Duplicate pattern IDs.** Two entries with the same `id` load successfully; only the first is ever distinguishable in a report.
+
+The registry is a file contributors edit, and the current validation is a floor, not a ceiling.
 
 ## Deviations from the README
 
-The README is the architecture source of truth. Three things in this file diverge from it. These are not necessarily bugs — build order step 1 explicitly calls for a naive single-threaded scan — but they should be deliberate and recorded.
+The README is the architecture source of truth. Two items in this file diverge from it.
 
-| README says                                                        | This file does                                                                            | Assessment                                                                                                                                                                                                                                                                     |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Canonical `Finding` lives in `src/core/finding.ts`                 | `Finding` is declared in `regex-engine.ts`                                                | **Drift.** The README's decision table is explicit that the canonical shape is shared by every reporter. When `core/finding.ts` lands, this declaration must move and every importer updated. Currently `Finding` has no `confidence` field even though `Pattern` carries one. |
-| Detection "streams each file line-by-line (`fs.createReadStream`)" | `scanContent` takes a full string; `loadPatterns` is synchronous                          | **Expected for step 1.** Streaming arrives with the worker pool in step 3. Worth a `[TODO]` rather than a fix.                                                                                                                                                                 |
-| Detection uses "compiled regex patterns"                           | `new RegExp(...)` is constructed inside `scanContent`, i.e. once per pattern **per file** | **Drift with a cost.** For _N_ files and _M_ patterns this is _N×M_ compilations. Compilation should move to a `preparePatterns()` step run once. Low priority now, will matter on real repos.                                                                                 |
-| `Finding` is "read by every consumer"                              | Consumers do not exist yet                                                                | No action; noting that `confidence` is currently write-only dead data.                                                                                                                                                                                                         |
+| README says                                                        | This file does                                                                            | Assessment                                                                                                                                                          |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Detection "streams each file line-by-line (`fs.createReadStream`)" | `scanContent` takes a full string; `loadPatterns` is synchronous                          | **Expected for step 1.** Streaming arrives with the worker pool in step 3.                                                                                          |
+| Detection uses "compiled regex patterns"                           | `new RegExp(...)` is constructed inside `scanContent`, i.e. once per pattern **per file** | **Drift with a cost.** For _N_ files and _M_ patterns this is _N×M_ compilations. Compilation should move to a `preparePatterns()` step run once. Low priority now. |
+
+The `Finding`\-location and type-union items from the previous revision of this doc are resolved — `Finding` now lives in `core/finding.ts` and is imported here, and `Pattern.severity` / `Pattern.confidence` are the unions from that module.
 
 ## Issues and risks
 
-| #   | Issue                                                              | Severity | Where                        |
-| --- | ------------------------------------------------------------------ | -------- | ---------------------------- |
-| 1   | Silent skip when `entropyCheck: true` and `< 2` capture groups     | **High** | `scanContent`                |
-| 2   | Silent death when group 2 is shorter than `minLength` (default 20) | **High** | `scanContent` ↔ `entropy.ts` |
-| 3   | `JSON.parse(...) as Pattern[]` performs no runtime validation      | **High** | `loadPatterns`               |
-| 4   | `Finding` declared here instead of `core/finding.ts`               | Medium   | module scope                 |
-| 5   | `new RegExp` per pattern per file                                  | Medium   | `scanContent`                |
-| 6   | `confidence` on `Pattern` is never read or propagated              | Medium   | `Pattern` / `Finding`        |
-| 7   | Raw secret stored unredacted on every `Finding`                    | Medium   | `scanContent`                |
-| 8   | `severity` / `confidence` typed as `string`, not unions            | Low      | interfaces                   |
-| 9   | CRLF input leaves `\r` on lines                                    | Low      | line splitting               |
+| #   | Issue                                                                        | Severity | Where                        |
+| --- | ---------------------------------------------------------------------------- | -------- | ---------------------------- |
+| 1   | Trailing delimiter capture group silently misdirects extraction              | **High** | `extractSecret` contract     |
+| 2   | Extracted secret shorter than `entropy.minLength` → zero findings, no signal | **High** | `scanContent` ↔ `entropy.ts` |
+| 3   | `new RegExp` per pattern per file                                            | Medium   | `scanContent`                |
+| 4   | Capture-group contract not enforced at load time                             | Medium   | `loadPatterns`               |
+| 5   | CRLF input leaves `\\r` on lines (benign today)                              | Low      | line splitting               |
 
-## Type review
+## Resolved decisions
 
-Both interfaces use `string` where a closed union would catch typos at compile time:
+These questions were open in earlier revisions and are now answered. Kept here because the reasoning is worth more than the answer.
 
-```typescript
-confidence: string; // should be: "high" | "medium" | "low"
-severity: string; // should be: "critical" | "high" | "medium" | "low" | "info"
-```
-
-A registry entry with `severity: "highh"` compiles, loads, and flows all the way to a reporter before anything notices. Given that severity will eventually drive the git hook's exit code and the Action's annotation level, this is worth fixing before consumers exist.
-
-`flags` is likewise `string` — accepting `RegExp`'s own flag union or `""` would be tighter, but the engine mutates it (appending `g`) so a plain `string` is defensible.
+| Question                                           | Resolution                                                                                                                                                           |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Where does `Finding` live?                         | `src/core/finding.ts`, imported by every producer and consumer. Resolved when the reporters were designed.                                                           |
+| Should `mask` be redacted at construction?         | Yes. `Finding.masked` is the only secret-derived string on the object, and it is always the redacted form. No consumer ever sees a raw value. Resolved 2026-09-12.   |
+| Validation strategy for `loadPatterns`?            | Hand-rolled guards using the type predicates from `core/finding.ts`. No schema library. Resolved 2026-09-12.                                                         |
+| Should `severity` / `confidence` be closed unions? | Yes. `Severity` and `Confidence` are declared in `core/finding.ts` as `as const` arrays with derived types, and validated at the load boundary. Resolved 2026-09-12. |
+| Was `match[2]` the right capture-group convention? | No. Replaced by `extractSecret` and the last-non-empty-group rule. Resolved 2026-09-12.                                                                              |
+| Was the 32-bit fingerprint sufficient?             | No. Replaced by truncated SHA-256 of the extracted secret. Resolved 2026-09-12.                                                                                      |
 
 ## Open questions
 
-- **[TODO] Where does `Finding` live?** The README says `src/core/finding.ts`. This module says otherwise. Decide before a second consumer exists, because the cost of moving it grows with each importer.
-- **[TODO] Validation strategy for `loadPatterns`.** Hand-rolled guards, or a schema library? The README's config section already commits to schema-validated config (`config/schema.ts`), so there may be one dependency serving both.
-- **[TODO] Should the capture-group contract be validated at load time?** Recommended above. If yes, decide whether a violation is a hard error or a warning-with-pattern-id.
-- **[TODO] Should `match` be redacted at construction rather than at report time?** Redacting early means a `Finding` can be logged safely by anyone, at the cost of losing the value before any consumer that legitimately needs it. The README's position is redact-before-output; this question is whether that boundary is late enough.
+- **\[TODO\] Should the capture-group contract be enforced at load time?** A pattern with `entropyCheck: true` whose last non-empty capture group does not exist, or is likely a delimiter, is difficult to detect statically — the regex does not declare its intent. Options: require an explicit `secretGroup` field on patterns that set `entropyCheck`, or document the rule and accept the silent failure mode. The former adds registry complexity; the latter is what exists today.
+- **\[TODO\] Should `hasHighEntropy` accept a per-pattern length override?** The default `minLength: 20` is a global floor. A provider whose secrets are legitimately 12–19 characters cannot use `entropyCheck`. Either the option moves to the pattern, or the gate is bypassed for those providers.
 
 ## Related
 
-- [Entropy-based detection](../concepts/entropy.md) — the gate called from the match loop
-- [The pipeline](../concepts/pipeline.md) — how this stage connects to discovery and verification
+- [Entropy-based detection](entropy.md) — the gate called from the match loop
+- [The pipeline](../concepts//pipeline.md) — how this stage connects to discovery and verification
+- `src/core/finding.ts` — the canonical `Finding` shape and ordering comparators
+- `src/report/redact.ts` — the masking function called for every finding
 - `src/data/patterns.json` — the registry this module loads
 - `README.md` — architectural decision table and folder structure
-
----
-
-_Update this page when the capture-group contract changes, when validation lands in `loadPatterns`, or when `Finding` moves._
