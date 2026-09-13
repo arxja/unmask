@@ -1,4 +1,5 @@
 import type { Reporter, ScanResult, Finding, Severity } from "../core/finding";
+import { compareByLocation } from "../core/finding";
 
 // ---------------------------------------------------------------------------
 // ANSI helpers — dep-free, respects NO_COLOR and TTY detection.
@@ -188,13 +189,6 @@ export class TerminalReporter implements Reporter {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const SEVERITY_RANK: Record<Severity, number> = {
-  critical: 0,
-  high: 1,
-  medium: 2,
-  low: 3,
-};
-
 /** Group by file; sort files A–Z; sort within file by line, then severity. */
 function groupByFile(findings: Finding[]): Map<string, Finding[]> {
   const map = new Map<string, Finding[]>();
@@ -204,12 +198,7 @@ function groupByFile(findings: Finding[]): Map<string, Finding[]> {
     arr.push(f);
   }
   for (const arr of map.values()) {
-    arr.sort(
-      (a, b) =>
-        a.line - b.line ||
-        a.column - b.column ||
-        SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity],
-    );
+    arr.sort(compareByLocation);
   }
   return new Map([...map].sort(([a], [b]) => a.localeCompare(b)));
 }

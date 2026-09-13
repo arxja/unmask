@@ -5,6 +5,7 @@ import {
   type ScanResult,
   type Finding,
 } from "../core/finding";
+import { SEVERITIES, type Severity } from "../core/finding";
 
 const SCHEMA_VERSION = 1;
 
@@ -42,7 +43,9 @@ export class JsonReporter implements Reporter {
   }
 
   private buildPayload(result: ScanResult) {
-    const bySeverity = { critical: 0, high: 0, medium: 0, low: 0 };
+    const bySeverity = Object.fromEntries(
+      SEVERITIES.map((s) => [s, 0]),
+    ) as Record<Severity, number>;
     const unique = new Set<string>();
 
     for (const f of result.findings) {
@@ -54,7 +57,7 @@ export class JsonReporter implements Reporter {
 
     return {
       schemaVersion: SCHEMA_VERSION,
-      tool: { name: "secret-detector", version: result.version },
+      tool: { name: "unmask", version: result.version },
       scannedAt: new Date().toISOString(),
       rootDir: result.rootDir,
       summary: {
@@ -64,6 +67,7 @@ export class JsonReporter implements Reporter {
         uniqueSecrets: unique.size,
         bySeverity,
       },
+      skipped: result.filesSkipped,
       findings: orderedFindings.map(serializeFinding),
     };
   }
@@ -86,5 +90,6 @@ function serializeFinding(f: Finding) {
     column: f.column,
     masked: f.masked,
     context: f.context,
+    fingerprint: f.fingerprint,
   };
 }
