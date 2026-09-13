@@ -1,10 +1,7 @@
-import * as fs from "fs";
+import * as fs from "node:fs";
 import fg from "fast-glob";
-import {
-  loadPatterns,
-  scanContent,
-  type Finding,
-} from "../detection/regex-engine";
+import { loadPatterns, scanContent } from "../detection/regex-engine";
+import { Finding } from "../core/finding";
 
 export interface DiscoverOptions {
   /**
