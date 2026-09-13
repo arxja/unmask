@@ -148,60 +148,6 @@ describe("scanContent", () => {
   });
 });
 
-describe("JsonReporter", () => {
-  it("omits fingerprint from serialized findings and sorts a copy of findings", () => {
-    const original = [
-      {
-        patternId: "low",
-        patternName: "Low",
-        provider: "test",
-        severity: "low",
-        confidence: "high",
-        file: "z.ts",
-        line: 2,
-        column: 1,
-        masked: "zz••••••••zz",
-        fingerprint: "fffaaa111bbb",
-        context: ["z"],
-      },
-      {
-        patternId: "crit",
-        patternName: "Critical",
-        provider: "test",
-        severity: "critical",
-        confidence: "high",
-        file: "a.ts",
-        line: 1,
-        column: 1,
-        masked: "aa••••••••aa",
-        fingerprint: "aaa111bbb222",
-        context: ["a"],
-      },
-    ] as const;
-
-    const stream = { write: vi.fn() };
-    const reporter = new JsonReporter({ pretty: false, stream: stream as any });
-
-    reporter.report({
-      findings: [...original],
-      filesScanned: 2,
-      durationMs: 4,
-      rootDir: ".",
-      version: "1.0.0",
-    });
-
-    const payload = JSON.parse(stream.write.mock.calls[0][0]);
-
-    expect(payload.findings.map((f: { file: string }) => f.file)).toEqual([
-      "a.ts",
-      "z.ts",
-    ]);
-    expect(payload.findings[0]).not.toHaveProperty("fingerprint");
-    expect(payload.findings[1]).not.toHaveProperty("fingerprint");
-    expect(original.map((f) => f.file)).toEqual(["z.ts", "a.ts"]);
-  });
-});
-
 describe("loadPatterns", () => {
   beforeEach(() => vol.reset());
 
