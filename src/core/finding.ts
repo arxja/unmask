@@ -73,9 +73,19 @@ export interface Finding {
   context?: string[];
 }
 
+export interface SkippedFile {
+  /** Path relative to ScanInput.rootDir, forward-slashed. */
+  path: string;
+  /** Human-readable reason. Free-form; do not parse. */
+  reason: string;
+}
+
 export interface ScanResult {
   findings: Finding[];
+  /** Files read and scanned successfully. Includes files with 0 findings. */
   filesScanned: number;
+  /** Files that could not be read or scanned. Disjoint from filesScanned. */
+  filesSkipped: SkippedFile[];
   durationMs: number;
   rootDir: string;
   version: string;
