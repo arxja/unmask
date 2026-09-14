@@ -1,7 +1,4 @@
-import * as fs from "node:fs";
 import fg from "fast-glob";
-import { loadPatterns, scanContent } from "../detection/regex-engine";
-import { Finding } from "../core/finding";
 
 export interface DiscoverOptions {
   /**
@@ -69,44 +66,4 @@ export interface ScanOptions {
    * Passed directly to the discovery wrapper.
    */
   discovery?: DiscoverOptions;
-}
-
-/**
- * Core scanning utility.
- * Loads regex patterns from JSON and scans a directory.
- */
-export function scanForSecrets(
-  patternFile: string,
-  targetDir: string,
-  options: ScanOptions = {},
-): Finding[] {
-  // 1. Load patterns
-  const patterns = loadPatterns(patternFile);
-
-  // 2. Discover files using our wrapper
-  const files = discoverFiles(targetDir, options.discovery || {});
-
-  const findings: Finding[] = [];
-
-  // 3. Scan each file
-  for (const file of files) {
-    let content: string;
-
-    try {
-      content = fs.readFileSync(file, "utf-8");
-    } catch {
-      // Silently skip unreadable files.
-      continue;
-    }
-
-    try {
-      findings.push(...scanContent(content, file, patterns));
-    } catch (error) {
-      console.warn(
-        `Skipping ${file}: scan failed (${error instanceof Error ? error.message : String(error)})`,
-      );
-    }
-  }
-
-  return findings;
 }
