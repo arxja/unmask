@@ -5,6 +5,7 @@ import { ConfigSchema } from "./schema";
 export type Config = z.infer<typeof ConfigSchema>;
 
 export async function configLoader(searchFrom?: string): Promise<Config> {
+  // it's pre-call
   const explorer = cosmiconfig("unmask");
 
   try {
@@ -21,7 +22,7 @@ export async function configLoader(searchFrom?: string): Promise<Config> {
     return validatedConfig;
   } catch (error) {
     // Handle parsing or validation errors
-    console.error("Error loading or validating configuration:", error);
-    throw error;
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to load config: ${msg}`);
   }
 }
