@@ -62,6 +62,7 @@ export class JsonReporter implements Reporter {
       rootDir: result.rootDir,
       summary: {
         filesScanned: result.filesScanned,
+        filesSkipped: result.filesSkipped.length,
         durationMs: result.durationMs,
         findings: result.findings.length,
         uniqueSecrets: unique.size,
