@@ -148,6 +148,13 @@ export class TerminalReporter implements Reporter {
           `${result.filesScanned} files · ${result.durationMs}ms`,
       )}\n\n`,
     );
+    if (result.filesSkipped.length > 0) {
+      const n = result.filesSkipped.length;
+      this.stream.write(
+        `  ${c.yellow(`⚠ ${n} file${n === 1 ? "" : "s"} skipped`)}` +
+          ` ${c.gray("— the scan was not exhaustive (run with --verbose to list)")}\n`,
+      );
+    }
   }
 
   private printFinding(
