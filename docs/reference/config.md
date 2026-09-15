@@ -2,52 +2,10 @@
 title: Config
 status: experimental
 since: unreleased
-last_updated: 2026-09-15
-audience: user
-source: src/config/schema.ts, src/config/load-config.ts
-depends_on: src/core/finding.ts
----
-
-# Config
-
-The `.unmaskrc` file (or an equivalent) that customizes a scan.
-
-Loaded with `cosmiconfig` and validated with `zod`. A missing config file is not an error — defaults apply. A config file that fails validation is an error: it exits with code 2 and a single message on stderr.
-
-## File locations
-
-`cosmiconfig` searches from the scan's `--path` upward. Recognized names:
-
-- `.unmaskrc` (JSON or YAML)
-- `.unmaskrc.json`
-- `.unmaskrc.yaml`, `.unmaskrc.yml`
-- `.unmaskrc.js`, `.unmaskrc.cjs`
-- `unmask.config.js`, `unmask.config.cjs`
-- `unmask.config.ts` (requires a TS runtime; `tsx` provides one during development)
-
-The first match wins. Config files in parent directories are found by the upward search — useful for monorepos with a shared config.
-
-## Schema
-
-```typescript
-interface Config {
-  ignore?: string[];
-  include?: string[];
-  failOn?: Severity;
-  customPatterns?: string;
-}
-```
-
----
-
-title: Config
-status: experimental
-since: unreleased
 last_updated: 2026-09-14
 audience: user
 source: src/config/schema.ts, src/config/load-config.ts
 depends_on: src/core/finding.ts
-
 ---
 
 # Config
@@ -80,12 +38,12 @@ interface Config {
 }
 ```
 
-| Field            | Type           | Default    | Meaning                                                                              |
-| ---------------- | -------------- | ---------- | ------------------------------------------------------------------------------------ | ------ | ---------- | ---------------------------------------------------------------------- |
-| `ignore`         | `string[]`     | `[]`       | Additional glob patterns to ignore, on top of the discovery defaults.                |
-| `include`        | `string[]`     | `["**/*"]` | Glob patterns to include. Replaces the default when set.                             |
-| `failOn`         | `"critical" \\ | "high" \\  | "medium" \\                                                                          | "low"` | `"medium"` | Minimum severity that produces exit code 1. Overridden by `--fail-on`. |
-| `customPatterns` | `string`       | _(unset)_  | Path to a JSON file containing additional patterns. Relative to the scan's `--path`. |
+| Field            | Type                                        | Default    | Meaning                                                                              |
+| ---------------- | ------------------------------------------- | ---------- | ------------------------------------------------------------------------------------ |
+| `ignore`         | `string[]`                                  | `[]`       | Additional glob patterns to ignore, on top of the discovery defaults.                |
+| `include`        | `string[]`                                  | `["**/*"]` | Glob patterns to include. Replaces the default when set.                             |
+| `failOn`         | `"critical" \| "high" \| "medium" \| "low"` | `"medium"` | Minimum severity that produces exit code 1. Overridden by `--fail-on`.               |
+| `customPatterns` | `string`                                    | _(unset)_  | Path to a JSON file containing additional patterns. Relative to the scan's `--path`. |
 
 ## `ignore`
 
