@@ -44,7 +44,7 @@ describe("configLoader", () => {
   });
 
   it("returns the validated config when a valid file is found", async () => {
-    const raw = { ignore: ["dist/**"], customPatterns: "patterns.json" };
+    const raw = { ignore: ["dist/**"], customPatterns: "patterns.json", failOn: "high" };
     mockedCosmiconfig.mockReturnValue(
       fakeExplorer({ isEmpty: false, config: raw }) as any,
     );

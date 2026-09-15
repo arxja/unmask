@@ -95,6 +95,18 @@ export class TerminalReporter implements Reporter {
         `\n  ${c.bold("✔ No secrets found")} ` +
           `${c.gray(`· ${result.filesScanned} files · ${result.durationMs}ms`)}\n\n`,
       );
+
+      // If some files were skipped, emit the same warning we print in the
+      // footer for non-empty results so users know the scan was not
+      // exhaustive even when no findings were produced.
+      if (result.filesSkipped.length > 0) {
+        const skipped = result.filesSkipped.length;
+        this.stream.write(
+          `  ${c.yellow(`⚠ ${skipped} file${skipped === 1 ? "" : "s"} skipped`)}` +
+            ` ${c.gray("— the scan was not exhaustive (run with --verbose to list)")}\n`,
+        );
+      }
+
       return;
     }
 
@@ -148,6 +160,13 @@ export class TerminalReporter implements Reporter {
           `${result.filesScanned} files · ${result.durationMs}ms`,
       )}\n\n`,
     );
+    if (result.filesSkipped.length > 0) {
+      const n = result.filesSkipped.length;
+      this.stream.write(
+        `  ${c.yellow(`⚠ ${n} file${n === 1 ? "" : "s"} skipped`)}` +
+          ` ${c.gray("— the scan was not exhaustive (run with --verbose to list)")}\n`,
+      );
+    }
   }
 
   private printFinding(

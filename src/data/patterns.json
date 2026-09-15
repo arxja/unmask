@@ -3,7 +3,7 @@
     "id": "aws-access-key-id",
     "name": "AWS Access Key ID",
     "provider": "AWS",
-    "regex": "\\b(AKIA|ASIA)[0-9A-Z]{16}\\b",
+    "regex": "(AKIA[0-9A-Z]{16})",
     "flags": "",
     "confidence": "high",
     "severity": "critical",
