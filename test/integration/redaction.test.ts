@@ -26,7 +26,7 @@ const awsPattern: Pattern = {
 };
 
 // A real-shaped key. Not a real credential — the format is what matters.
-const RAW_SECRET = "AKIAIOSFODNN7EXAMPLE";
+const RAW_SECRET = "AKIAJ7K2N8P4Q9R3S6T1";
 
 function captureStream() {
   const chunks: string[] = [];

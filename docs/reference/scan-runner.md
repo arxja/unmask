@@ -2,7 +2,7 @@
 title: Scan runner
 status: experimental
 since: unreleased
-last_updated: 2026-09-13
+last_updated: 2026-09-16
 audience: contributor
 source: src/core/scan-runner.ts
 depends_on: src/discovery/file-discovery.ts, src/detection/regex-engine.ts, src/core/finding.ts
@@ -19,7 +19,7 @@ Does not own pattern loading (the caller), progress UI (the CLI), or reporting (
 The scanner has three phases that must happen in order with specific error handling:
 
 1. **Discovery** returns a list of absolute paths.
-2. **Detection** runs each file's content through `scanContent`, producing `Finding[]` per file.
+2. **Detection** runs each file's content through `scanContent`, producing `Candidate[]` per file.
 3. **Aggregation** flattens those into a single `ScanResult`.
 
 Each phase is its own module. Something has to sequence them and decide what happens when a file cannot be read, when a pattern throws, and how absolute paths become relative. That is this file's entire job.

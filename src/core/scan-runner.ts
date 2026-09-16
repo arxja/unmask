@@ -1,7 +1,7 @@
 /**
  * Scan orchestration.
  *
- * Owns the lifecycle: discovery → detection → aggregation.
+ * Owns the lifecycle: discovery → detection → verification → aggregation.
  * Owns the boundary: absolute paths become rootDir-relative, forward-slashed.
  * Owns the failure policy: per-file errors are recorded, not thrown.
  *
@@ -20,6 +20,7 @@ import {
   type DiscoverOptions,
 } from "../discovery/file-discovery";
 import { scanContent, type Pattern } from "../detection/regex-engine";
+import { verifyFindings } from "../verification/verify";
 import type { Finding, ScanResult, SkippedFile } from "./finding";
 
 // ---------------------------------------------------------------------------
@@ -63,7 +64,21 @@ export async function scan(input: ScanInput): Promise<ScanResult> {
     }
 
     try {
-      findings.push(...scanContent(content, relPath, patterns));
+      const candidates = scanContent(content, relPath, patterns);
+
+      // Verification runs only when there is something to verify. A
+      // file with zero candidates never parses its AST — the expensive
+      // part of the pipeline is skipped for the vast majority of files.
+      //
+      // verifyFindings never throws: a parse failure produces `ast: null`
+      // and AST-dependent rules short-circuit to "keep". Non-AST rules
+      // still run.
+      const verified =
+        candidates.length > 0
+          ? verifyFindings(candidates, content, relPath)
+          : [];
+
+      findings.push(...verified);
       filesScanned++;
     } catch (error) {
       // A scan-time failure is a bug in a pattern (malformed regex,
@@ -75,6 +90,7 @@ export async function scan(input: ScanInput): Promise<ScanResult> {
       });
     }
   }
+
   return {
     findings,
     filesScanned,
@@ -96,7 +112,6 @@ export async function scan(input: ScanInput): Promise<ScanResult> {
  *
  * `sep` is "/" on POSIX and "\\" on Windows. split/join is a no-op on POSIX.
  */
-
 function toRelative(absPath: string, rootDir: string): string {
   const rel = isAbsolute(absPath) ? relative(rootDir, absPath) : absPath;
   return rel.split(sep).join("/");

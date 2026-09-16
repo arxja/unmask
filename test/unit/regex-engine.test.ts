@@ -5,7 +5,7 @@ import {
   loadPatterns,
   type Pattern,
 } from "../../src/detection/regex-engine";
-import { JsonReporter } from "../../src/report/json-reporter";
+import type { Finding } from "../../src/core/finding";
 
 vi.mock("node:fs");
 vi.mock("node:fs/promises");
@@ -23,10 +23,23 @@ const patterns: Pattern[] = [
   },
 ];
 
+/**
+ * scanContent returns Candidate[] (finding + rawValue). Tests that
+ * assert on the Finding shape unwrap here rather than repeating
+ * `.finding` at every call site.
+ */
+function scanned(
+  content: string,
+  filePath: string,
+  patterns: Pattern[],
+): Finding[] {
+  return scanContent(content, filePath, patterns).map((c) => c.finding);
+}
+
 describe("scanContent", () => {
   it("finds a pattern and returns 1-based line and column", () => {
     const content = "line one\nKEY_ABC_xK9mP2qL8nR4tZ6w\nline three";
-    const findings = scanContent(content, "fake.txt", patterns);
+    const findings = scanned(content, "fake.txt", patterns);
 
     expect(findings).toHaveLength(1);
     expect(findings[0].line).toBe(2);
@@ -36,7 +49,7 @@ describe("scanContent", () => {
   });
 
   it("masks the extracted secret, not the whole match", () => {
-    const [f] = scanContent("KEY_ABC_xK9mP2qL8nR4tZ6w", "fake.txt", patterns);
+    const [f] = scanned("KEY_ABC_xK9mP2qL8nR4tZ6w", "fake.txt", patterns);
 
     // extractSecret → "xK9mP2qL8nR4tZ6w" (last non-empty capture group)
     // redact()      → 2 chars + 8 dots + 2 chars
@@ -44,13 +57,13 @@ describe("scanContent", () => {
   });
 
   it("produces a 12-char hex fingerprint", () => {
-    const [f] = scanContent("KEY_ABC_xK9mP2qL8nR4tZ6w", "fake.txt", patterns);
+    const [f] = scanned("KEY_ABC_xK9mP2qL8nR4tZ6w", "fake.txt", patterns);
     expect(f.fingerprint).toMatch(/^[0-9a-f]{12}$/);
   });
 
   it("produces the same fingerprint for the same secret in different contexts", () => {
-    const a = scanContent("KEY_ABC_xK9mP2qL8nR4tZ6w", "a.ts", patterns)[0];
-    const b = scanContent("KEY_XYZ_xK9mP2qL8nR4tZ6w", "b.ts", patterns)[0];
+    const a = scanned("KEY_ABC_xK9mP2qL8nR4tZ6w", "a.ts", patterns)[0];
+    const b = scanned("KEY_XYZ_xK9mP2qL8nR4tZ6w", "b.ts", patterns)[0];
 
     expect(a.fingerprint).toBe(b.fingerprint);
     expect(a.masked).toBe(b.masked);
@@ -73,7 +86,7 @@ describe("scanContent", () => {
     ];
 
     const content = "TOKEN=abc12345 KEY_ABC_xK9mP2qL8nR4tZ6w";
-    const findings = scanContent(content, "fake.txt", multiPattern);
+    const findings = scanned(content, "fake.txt", multiPattern);
 
     expect(findings).toHaveLength(2);
     for (const finding of findings) {
@@ -84,14 +97,54 @@ describe("scanContent", () => {
   });
 
   it("returns an empty array when nothing matches", () => {
-    const findings = scanContent("clean file", "fake.txt", patterns);
+    const findings = scanned("clean file", "fake.txt", patterns);
     expect(findings).toEqual([]);
+  });
+
+  describe("candidate shape", () => {
+    it("wraps each finding with the raw value that produced it", () => {
+      const candidates = scanContent(
+        "KEY_ABC_xK9mP2qL8nR4tZ6w",
+        "fake.txt",
+        patterns,
+      );
+
+      expect(candidates).toHaveLength(1);
+      const [c] = candidates;
+
+      expect(c.finding.masked).toBe("xK••••••••6w");
+      expect(c.finding.fingerprint).toMatch(/^[0-9a-f]{12}$/);
+      expect(c.finding.line).toBe(1);
+      expect(c.finding.column).toBe(1);
+
+      // The raw value is the last non-empty capture group — the same
+      // string redact() was called with.
+      expect(c.rawValue).toBe("xK9mP2qL8nR4tZ6w");
+    });
+
+    it("does not leak the raw value into the finding", () => {
+      // Regression guard for the Candidate boundary: no field on
+      // Finding may carry the raw secret. If a future change adds
+      // `raw` or `rawMatch` to Finding, this test fails before any
+      // reporter can be built on top of the leak.
+      const raw = "xK9mP2qL8nR4tZ6w";
+      const [c] = scanContent("KEY_ABC_xK9mP2qL8nR4tZ6w", "f.ts", patterns);
+
+      expect(JSON.stringify(c.finding)).not.toContain(raw);
+      for (const value of Object.values(c.finding)) {
+        expect(value).not.toBe(raw);
+      }
+    });
+
+    it("returns an empty array when nothing matches", () => {
+      expect(scanContent("clean file", "fake.txt", patterns)).toEqual([]);
+    });
   });
 
   describe("extractSecret heuristic", () => {
     it("uses the whole match when the pattern has no capture groups", () => {
       const noGroups = [{ ...patterns[0], regex: "KEY_[A-Z]+_[A-Za-z0-9]+" }];
-      const [f] = scanContent("KEY_ABC_xK9mP2qL8nR4tZ6w", "f.ts", noGroups);
+      const [f] = scanned("KEY_ABC_xK9mP2qL8nR4tZ6w", "f.ts", noGroups);
 
       // Whole match is 23 chars → 2 + 8 dots + 2
       expect(f.masked).toBe("KE••••••••6w");
@@ -101,7 +154,7 @@ describe("scanContent", () => {
       const trailing = [
         { ...patterns[0], regex: "KEY_([A-Z]+)_([A-Za-z0-9]+)(?:\\s|$)" },
       ];
-      const [f] = scanContent("KEY_ABC_xK9mP2qL8nR4tZ6w", "f.ts", trailing);
+      const [f] = scanned("KEY_ABC_xK9mP2qL8nR4tZ6w", "f.ts", trailing);
 
       expect(f.masked).toBe("xK••••••••6w");
     });
@@ -111,9 +164,13 @@ describe("scanContent", () => {
     const entropyPatterns = [{ ...patterns[0], entropyCheck: true }];
 
     it("rejects a match whose extracted secret has low entropy", () => {
-      // Extracted secret = "AAAAAAAAAAAAAAA" (15 chars, entropy 0)
+      // Extracted secret = "AAAAAAAAAAAAAAA" (15 chars, entropy 0).
+      // Note: this is caught by the minLength gate, not the entropy
+      // gate. The testing doc flags this as a known smell — a
+      // correctly-isolated entropy-density test needs a 20+ char
+      // value that clears length, runs, alphabet, and classes.
       const content = "KEY_ABC_AAAAAAAAAAAAAAA";
-      const findings = scanContent(content, "fake.txt", entropyPatterns);
+      const findings = scanned(content, "fake.txt", entropyPatterns);
       expect(findings).toHaveLength(0);
     });
 
@@ -132,17 +189,13 @@ describe("scanContent", () => {
         entropyCheck: true,
       };
 
-      expect(scanContent("KEY_ABC", "fake.txt", [missingGroupPattern])).toEqual(
-        [],
-      );
-      expect(scanContent("KEY_ABC_", "fake.txt", [emptyGroupPattern])).toEqual(
-        [],
-      );
+      expect(scanned("KEY_ABC", "fake.txt", [missingGroupPattern])).toEqual([]);
+      expect(scanned("KEY_ABC_", "fake.txt", [emptyGroupPattern])).toEqual([]);
     });
 
     it("accepts a match whose extracted secret has high entropy", () => {
       const content = "KEY_ABC_xK9mP2qL8nR4tZ6wY3vB5cD7fG1hJ0sA";
-      const findings = scanContent(content, "fake.txt", entropyPatterns);
+      const findings = scanned(content, "fake.txt", entropyPatterns);
       expect(findings).toHaveLength(1);
     });
   });
