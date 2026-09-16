@@ -2,7 +2,7 @@
 title: Regex detection engine
 status: experimental
 since: unreleased
-last_updated: 2026-09-12
+last_updated: 2026-09-16
 audience: contributor
 source: src/detection/regex-engine.ts
 depends_on: src/detection/entropy.ts, src/core/finding.ts, src/report/redact.ts
@@ -105,7 +105,7 @@ export function scanContent(
   content: string,
   filePath: string,
   patterns: Pattern[],
-): Finding[];
+): Candidate[];
 ```
 
 Takes the full file contents as a string. Splits on `\n` and iterates **pattern-outer, line-inner**.
@@ -173,6 +173,8 @@ context: \[redactLine(line, secret).trim()\],
 ```
 
 Every field that could carry a secret value is derived from the extracted secret and passed through `report/redact.ts`:
+
+The `Candidate` interface is added, matching `Finding` but with the extra `rawValue` field, documented as "the only place a raw secret exists in memory after this function returns.
 
 - `masked` is `redact(secret)` — the fixed-width mask, never the raw value. **The raw secret is not stored on the `Finding`.** This is a deliberate change from earlier versions and it is what makes the finding safe to serialize, log, or hand to any reporter without a second redaction pass.
 - `fingerprint` is SHA-256 of `secret`, not of `match[0]`. The same secret captured under different variable names produces the same fingerprint.
