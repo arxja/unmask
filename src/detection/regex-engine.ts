@@ -10,6 +10,20 @@ import {
   isSeverity,
 } from "../core/finding";
 
+/**
+ * A candidate finding — the finding plus the raw secret value that
+ * produced it.
+ *
+ * The raw value lives only in the interval between `scanContent` and
+ * `verifyFindings`. It is not part of `Finding`, it is not serialized,
+ * it is not accessible to reporters. The type system enforces the
+ * boundary: there is no way to store a raw value on a `Finding`.
+ */
+export interface Candidate {
+  finding: Finding;
+  rawValue: string;
+}
+
 export interface Pattern {
   id: string;
   name: string;
@@ -129,8 +143,8 @@ export function scanContent(
   content: string,
   filePath: string,
   patterns: Pattern[],
-): Finding[] {
-  const findings: Finding[] = [];
+): Candidate[] {
+  const candidates: Candidate[] = [];
   const lines = content.split("\n");
   const lineSecrets = new Map<number, Set<string>>();
   const lineFindingIndexes = new Map<number, number[]>();
@@ -163,38 +177,46 @@ export function scanContent(
         }
         lineSecrets.get(i)!.add(secret);
 
-        const findingIndex =
-          findings.push({
-            patternId: pattern.id,
-            patternName: pattern.name,
-            provider: pattern.provider,
-            severity: pattern.severity,
-            confidence: pattern.confidence,
-            file: filePath,
-            line: i + 1,
-            column: match.index + 1,
-            fingerprint: fingerprint(secret),
-            masked: redact(secret),
+        const candidateIndex =
+          candidates.push({
+            finding: {
+              patternId: pattern.id,
+              patternName: pattern.name,
+              provider: pattern.provider,
+              severity: pattern.severity,
+              confidence: pattern.confidence,
+              file: filePath,
+              line: i + 1,
+              column: match.index + 1,
+              fingerprint: fingerprint(secret),
+              masked: redact(secret),
+            },
+            rawValue: secret,
           }) - 1;
 
         if (!lineFindingIndexes.has(i)) {
           lineFindingIndexes.set(i, []);
         }
-        lineFindingIndexes.get(i)!.push(findingIndex);
+        lineFindingIndexes.get(i)!.push(candidateIndex);
       }
     }
   }
 
+  // Redact each line once and share the result across every finding on
+  // it. Sort secrets by length descending so a longer secret is replaced
+  // before a shorter substring of it can consume the match.
   for (const [lineNumber, secrets] of lineSecrets) {
-    const redactedLine = Array.from(secrets).reduce(
+    const sorted = Array.from(secrets).sort((a, b) => b.length - a.length);
+    const redactedLine = sorted.reduce(
       (current, secret) => redactLine(current, secret),
       lines[lineNumber],
     );
+    const context = [redactedLine.trim()];
 
-    for (const findingIndex of lineFindingIndexes.get(lineNumber) ?? []) {
-      findings[findingIndex].context = [redactedLine.trim()];
+    for (const candidateIndex of lineFindingIndexes.get(lineNumber) ?? []) {
+      candidates[candidateIndex].finding.context = context;
     }
   }
 
-  return findings;
+  return candidates;
 }
