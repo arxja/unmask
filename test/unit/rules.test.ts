@@ -199,3 +199,51 @@ describe("templateLiteralValueRule", () => {
     expect(v.action).toBe("keep");
   });
 });
+
+describe("constantAliasRule — innermost declarator", () => {
+  it("keeps when only an outer variable is a fixture name", () => {
+    // The inner variable's name is what matters. The outer name is a
+    // container, not the direct assignment. Regression guard for the
+    // rule's original bug: outer MOCK_OUTER must not cause the inner
+    // `realKey` to be dropped.
+    const src =
+      'const MOCK_OUTER = (() => { const realKey = "AKIA1234567890ABCDEF"; return realKey; })();';
+    const column = src.indexOf('"') + 2;
+    const finding = makeFinding({ line: 1, column });
+
+    const v = constantAliasRule(finding, "", ctxFor(src));
+    expect(v.action).toBe("keep");
+  });
+
+  it("drops when the inner variable is a fixture name", () => {
+    const src =
+      'const outer = (() => { const MOCK_KEY = "AKIA1234567890ABCDEF"; return MOCK_KEY; })();';
+    const column = src.indexOf('"') + 2;
+    const finding = makeFinding({ line: 1, column });
+
+    const v = constantAliasRule(finding, "", ctxFor(src));
+    expect(v.action).toBe("drop");
+  });
+
+  it("drops when both the inner and outer variables are fixture names", () => {
+    const src =
+      'const MOCK_OUTER = (() => { const MOCK_INNER = "AKIA1234567890ABCDEF"; return MOCK_INNER; })();';
+    const column = src.indexOf('"') + 2;
+    const finding = makeFinding({ line: 1, column });
+
+    const v = constantAliasRule(finding, "", ctxFor(src));
+    expect(v.action).toBe("drop");
+  });
+
+  it("keeps when the innermost declaration is a destructuring pattern", () => {
+    // The innermost VariableDeclarator has an ObjectPattern id, which
+    // has no single name to test. Conservative answer: keep.
+    const src =
+      'const MOCK_OUTER = (() => { const { key } = { key: "AKIA1234567890ABCDEF" }; return key; })();';
+    const column = src.indexOf('"') + 2;
+    const finding = makeFinding({ line: 1, column });
+
+    const v = constantAliasRule(finding, "", ctxFor(src));
+    expect(v.action).toBe("keep");
+  });
+});

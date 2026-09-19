@@ -1,12 +1,14 @@
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { configLoader } from "../config/load-config";
-import { loadPatterns } from "../detection/regex-engine";
+import { loadPatterns, type Pattern } from "../detection/regex-engine";
 import { scan } from "../core/scan-runner";
 import type { Severity } from "../core/finding";
 import { TerminalReporter } from "../report/terminal-reporter";
 import { JsonReporter } from "../report/json-reporter";
+import { gitStagedSource } from "../git/staged-files";
 import { mergePatterns, type PatternConflict } from "./merge-patterns";
 import { exitCodeFor } from "./exit-code";
 
@@ -17,12 +19,15 @@ export interface ScanCliOptions {
   failOn?: Severity;
   maxFindings?: string;
   verbose?: boolean;
-  /** Commander sets this to `false` only when `--no-color` is passed. */
   color?: boolean;
+  /** Read from the git index instead of the working tree. */
+  staged?: boolean;
+  /** Suppress output when the scan is clean. */
+  quiet?: boolean;
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BUILTIN_PATTERNS_PATH = resolve(HERE, "../src/data/patterns.json");
+const BUILTIN_PATTERNS_PATH = resolve(HERE, "../data/patterns.json");
 
 export async function runScan(
   opts: ScanCliOptions,
@@ -39,7 +44,7 @@ export async function runScan(
   }
 
   const config = await configLoader(rootDir);
-  const failOn: Severity = opts.failOn ?? config.failOn;
+  const failOn: Severity = opts.failOn ?? config.failOn ?? "medium";
 
   const builtin = loadPatterns(BUILTIN_PATTERNS_PATH);
   const custom = config.customPatterns
@@ -47,17 +52,39 @@ export async function runScan(
     : [];
 
   const { patterns, conflicts } = mergePatterns(builtin, custom);
-  reportConflicts(conflicts);
+  if (!opts.quiet) reportConflicts(conflicts);
+
+  // When --staged is set, files come from the git index. Otherwise the
+  // disk source (the default in scan-runner) is used. The two are
+  // mutually exclusive by construction: we either pass a source or we
+  // don't.
+  const source = opts.staged
+    ? gitStagedSource({
+        rootDir,
+        ignore: config.ignore,
+        include: config.include,
+      })
+    : undefined;
 
   const result = await scan({
     rootDir,
     patterns,
-    discovery: {
-      ignore: config.ignore,
-      include: config.include,
-    },
+    discovery: { ignore: config.ignore, include: config.include },
     version,
+    source,
   });
+
+  // --quiet: print nothing only when the scan is genuinely clean. A
+  // scan with skipped files has an exit code of 2 and the user should
+  // see why, so we suppress only when there are no findings AND no
+  // skipped files.
+  if (
+    opts.quiet &&
+    result.findings.length === 0 &&
+    result.filesSkipped.length === 0
+  ) {
+    return 0;
+  }
 
   const reporter = pickReporter(opts, format);
   await reporter.report(result);
@@ -70,6 +97,8 @@ export async function runScan(
 
   return exitCodeFor(result, failOn);
 }
+
+// ... rest of file unchanged (pickReporter, parseCount, reportConflicts) ...
 
 // ---------------------------------------------------------------------------
 // Internals
