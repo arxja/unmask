@@ -1,19 +1,8 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "es6",
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "outDir": "./dist",
-    "rootDir": "./",
-    "strict": true,
-    "noImplicitAny": true,
-    "types": ["node"],
-    "allowJs": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "allowImportingTsExtensions": false
+    "noEmit": true,
+    "types": ["node"]
   },
-  "include": ["src/**/*", "bin/*"],
-  "exclude": ["node_modules"]
+  "include": ["src/**/*", "bin/**/*", "test/**/*", "*.config.ts"]
 }

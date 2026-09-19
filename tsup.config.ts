@@ -6,5 +6,6 @@ export default defineConfig({
   target: "node20",
   outDir: "dist",
   clean: true,
+  tsconfig: "./tsconfig.build.json",
   // NO banner option — pnpm handles the shim
 });

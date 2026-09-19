@@ -94,6 +94,7 @@ type RuleVerdict =
 | `placeholder-value`      | drop   | Value contains a known placeholder substring (`YOUR_`, `CHANGEME`, `EXAMPLE`, …) or matches a placeholder shape (`<...>`, `${...}`, `${...}`, 8+ repeated characters). |
 | `env-reference`          | drop   | Position falls inside a `process.env.X` or `import.meta.env.X` expression.                                                                                             |
 | `template-literal-value` | drop   | Position falls inside an `${...}` interpolation of a template literal.                                                                                                 |
+| `constant-alias`         | drop   | Position is inside a string literal assigned to a variable whose name contains a fixture marker — `MOCK`, `FAKE`, `TEST`, `DUMMY`, `SAMPLE`, `EXAMPLE`, `STUB`.        |
 
 **Why `test-path` downgrades instead of dropping.** Test files can contain real leaks — a developer accidentally committing a production key into a test is exactly the kind of incident a secret scanner is for. Downgrading to `low` lets the CLI's `--fail-on` threshold decide whether that should fail CI, without hiding the finding.
 
@@ -114,6 +115,7 @@ The parser uses `errorRecovery: true`, so a file with a syntax error in one plac
 - **Rules do not see the pattern.** A rule cannot ask "which pattern produced this finding." If a future rule needs that — for example, to reject anything matched by `generic-high-entropy-secret` in a specific directory — the `Rule` signature needs a fourth argument.
 - **Verification runs even when the file is unparseable.** AST-dependent rules short-circuit, but path- and value-based rules still run. This is intentional: an unparseable file's candidates should still be filtered by the rules that do not need the AST.
 - **Performance is O(findings × rules) per file.** For a file with 100 findings and 4 rules, that is 400 rule calls. Each AST-dependent rule does one tree walk from offset to root, which is O(depth). Fine for realistic file sizes; the corpus benchmark will surface any pathological case.
+- **`constant-alias` matches on variable name, not on alias relationships.** It catches `const MOCK_KEY = "..."` but not `const x = MOCK_KEY;`. Alias-relationship analysis requires tracking scope across statements and is a future rule.
 
 ## Related
 

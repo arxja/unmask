@@ -5,6 +5,7 @@ import { placeholderValueRule } from "../../src/verification/rules/placeholder-v
 import { templateLiteralValueRule } from "../../src/verification/rules/template-literal-value";
 import { testPathRule } from "../../src/verification/rules/test-path";
 import type { Finding } from "../../src/core/finding";
+import { constantAliasRule } from "../../src/verification/rules/constant-alias";
 import type { VerificationContext } from "../../src/verification/types";
 
 function makeFinding(overrides: Partial<Finding> = {}): Finding {
@@ -82,6 +83,48 @@ describe("placeholderValueRule", () => {
     "aB3$xY9zQ2wV8nM5kL",
   ])("keeps %s", (value) => {
     const v = placeholderValueRule(makeFinding(), value, ctx);
+    expect(v.action).toBe("keep");
+  });
+});
+
+describe("constantAliasRule", () => {
+  it.each([
+    'const MOCK_STRIPE_KEY = "sk_live_aaaaaaaaaaaaaaaa";',
+    'const FAKE_AWS_KEY = "AKIAIOSFODNN7EXAMPLE";',
+    'const TEST_TOKEN = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";',
+    'const DUMMY = "sk_live_aaaaaaaaaaaaaaaa";',
+    'const SAMPLE_SECRET = "sk_live_aaaaaaaaaaaaaaaa";',
+    'const EXAMPLE_API_KEY = "sk_live_aaaaaaaaaaaaaaaa";',
+    'const STUB_KEY = "sk_live_aaaaaaaaaaaaaaaa";',
+    'export const MOCK_KEY = "sk_live_aaaaaaaaaaaaaaaa";',
+    'let _FAKE_KEY = "sk_live_aaaaaaaaaaaaaaaa";',
+  ])("drops literal assigned to fixture variable: %s", (src) => {
+    // Position inside the string literal.
+    const column = src.indexOf('"') + 2;
+    const finding = makeFinding({ line: 1, column });
+    const v = constantAliasRule(finding, "", ctxFor(src));
+    expect(v.action).toBe("drop");
+  });
+
+  it.each([
+    'const stripeKey = "sk_live_51H8xKqLmN9pQrStUvWxYz012345";',
+    'const config = { key: "sk_live_51H8xKqLmN9pQrStUvWxYz012345" };',
+    'foo("sk_live_51H8xKqLmN9pQrStUvWxYz012345");',
+    "const { MOCK_KEY } = obj;",
+  ])("keeps a literal not assigned to a fixture variable: %s", (src) => {
+    const column = src.indexOf('"') + 2;
+    const finding = makeFinding({ line: 1, column });
+    const v = constantAliasRule(finding, "", ctxFor(src));
+    expect(v.action).toBe("keep");
+  });
+
+  it("keeps when there is no AST", () => {
+    const finding = makeFinding();
+    const v = constantAliasRule(finding, "", {
+      ast: null,
+      source: "",
+      filePath: "",
+    });
     expect(v.action).toBe("keep");
   });
 });
