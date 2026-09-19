@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "description": "Files that a correct scanner MUST NOT report. Each entry names the rule expected to reject the finding — if a different rule rejects it, the tool reports the mismatch.",
+  "fixtures": {
+    "process-env.ts": { "rejectedBy": "env-reference" },
+    "placeholder-readme.md": { "rejectedBy": "placeholder-value" },
+    "mock-constant.ts": { "rejectedBy": "constant-alias" }
+  }
+}
