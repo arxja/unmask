@@ -3,16 +3,28 @@ import { findNodePath, offsetFromLineColumn } from "../node-locator";
 import type { Rule } from "../types";
 
 /**
- * A string literal assigned to a variable whose name signals it is a
- * fixture — MOCK_, FAKE_, TEST_, DUMMY_, SAMPLE_, EXAMPLE_, STUB_.
+ * A string literal directly assigned to a variable whose name signals
+ * it is a fixture — MOCK_, FAKE_, TEST_, DUMMY_, SAMPLE_, EXAMPLE_,
+ * STUB_.
  *
  *   const MOCK_STRIPE_KEY = "sk_live_...";   → drop
  *   const stripeKey = "sk_live_...";          → keep
  *   const key = process.env.STRIPE_KEY;       → keep (no literal)
  *
- * The check is anchored to the *variable name*, not to the value. The
- * value being MOCK-shaped is `placeholder-value`'s job. Two rules,
- * two signals, one purpose each.
+ * Only the innermost VariableDeclarator in the ancestor path is
+ * considered. A string nested inside a fixture-named object
+ * (e.g. `const MOCK_CONFIG = { key: "..." }`) is still dropped,
+ * because the innermost declarator is MOCK_CONFIG. But a string
+ * assigned to an inner variable that happens to live under a
+ * fixture-named outer variable is not:
+ *
+ *   const MOCK = (() => {
+ *     const realKey = "AKIA...";   // inner declarator is `realKey`
+ *     return realKey;
+ *   })();
+ *
+ * The inner variable's name is what matters — the outer name is a
+ * container, not an assignment.
  */
 
 const FIXTURE_PREFIXES = [
@@ -37,22 +49,33 @@ export const constantAliasRule: Rule = (finding, _rawValue, ctx) => {
   if (offset < 0) return { action: "keep" };
 
   const path = findNodePath(ctx.ast, offset);
+  const declarator = findInnermostDeclarator(path);
+  if (!declarator) return { action: "keep" };
 
-  for (const node of path) {
-    if (node.type !== "VariableDeclarator") continue;
-    const name = declaratorName(node);
-    if (!name) continue;
+  const name = declaratorName(declarator);
+  if (!name) return { action: "keep" };
 
-    if (FIXTURE_PATTERN.test(name)) {
-      return {
-        action: "drop",
-        reason: `assigned to fixture variable "${name}"`,
-      };
-    }
+  if (FIXTURE_PATTERN.test(name)) {
+    return {
+      action: "drop",
+      reason: `assigned to fixture variable "${name}"`,
+    };
   }
 
   return { action: "keep" };
 };
+
+/**
+ * Walk the ancestor path from innermost outward and return the first
+ * VariableDeclarator. Returns undefined when no VariableDeclarator is
+ * on the path.
+ */
+function findInnermostDeclarator(path: readonly Node[]): Node | undefined {
+  for (let i = path.length - 1; i >= 0; i--) {
+    if (path[i].type === "VariableDeclarator") return path[i];
+  }
+  return undefined;
+}
 
 /**
  * Extract the identifier name from a VariableDeclarator's `id`, if the
