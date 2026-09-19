@@ -10,7 +10,7 @@ depends_on: src/commands/exit-code.ts, src/commands/merge-patterns.ts, src/confi
 
 # CLI
 
-The `unmask` binary. One subcommand in v1: `scan`. `install` and the git hook land in a later build-order step.
+The `unmask` binary. Three subcommands in v1: `scan`, `install`, `uninstall`. and the git hook land in a later build-order step.
 
 ## `unmask scan`
 
@@ -20,17 +20,53 @@ Walks a directory, runs the built-in and custom patterns against every file, and
 unmask scan [options]
 ```
 
+## `unmask install`
+
+Installs the pre-commit hook in the current repository.
+
+```bash
+unmask install [--path <dir>]
+```
+
+| Flag               | Default | Meaning                                             |
+| ------------------ | ------- | --------------------------------------------------- |
+| `-p, --path <dir>` | `.`     | Repository root. Must be inside a git working tree. |
+
+Exit codes: `0` on success, `2` on a user-facing failure (not a git repository, custom `core.hooksPath` configured).
+
+The install is idempotent. Running it again overwrites the hook and preserves any previously chained `.unmask-original`.
+
+See [Git hook](https://./git-hook.md) for the full behavior, including chaining and the `core.hooksPath` refusal.
+
+## `unmask uninstall`
+
+Removes the pre-commit hook.
+
+```bash
+unmask uninstall [--path <dir>]
+```
+
+| Flag               | Default | Meaning          |
+| ------------------ | ------- | ---------------- |
+| `-p, --path <dir>` | `.`     | Repository root. |
+
+Exit codes: `0` on success or when no hook was installed, `2` when the hook was not installed by unmask.
+
+**The uninstall refuses to remove a hook that it did not write.** See [Git hook](./git-hook.md).
+
 ### Options
 
-| Flag                    | Default             | Meaning                                                               |
-| ----------------------- | ------------------- | --------------------------------------------------------------------- |
-| `-p, --path <dir>`      | `.`                 | Directory to scan. Converted to an absolute path before use.          |
-| `-f, --format <format>` | `terminal`          | `terminal` for human output, `json` for machine-readable.             |
-| `-o, --output <file>`   | _(stdout)_          | Write output to a file. **Requires `--format=json`.**                 |
-| `--fail-on <severity>`  | config, or `medium` | Minimum severity that produces exit code 1.                           |
-| `--max-findings <n>`    | `50`                | Maximum findings to print in terminal format. `0` means unlimited.    |
-| `--verbose`             | off                 | Print the masked source line under each finding.                      |
-| `--no-color`            | auto                | Disable ANSI colors. Auto-detects `NO_COLOR`, `FORCE_COLOR`, and TTY. |
+| Flag                    | Default             | Meaning                                                                                   |
+| ----------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
+| `-p, --path <dir>`      | `.`                 | Directory to scan. Converted to an absolute path before use.                              |
+| `-f, --format <format>` | `terminal`          | `terminal` for human output, `json` for machine-readable.                                 |
+| `-o, --output <file>`   | _(stdout)_          | Write output to a file. **Requires `--format=json`.**                                     |
+| `--fail-on <severity>`  | config, or `medium` | Minimum severity that produces exit code 1.                                               |
+| `--max-findings <n>`    | `50`                | Maximum findings to print in terminal format. `0` means unlimited.                        |
+| `--verbose`             | off                 | Print the masked source line under each finding.                                          |
+| `--no-color`            | auto                | Disable ANSI colors. Auto-detects `NO_COLOR`, `FORCE_COLOR`, and TTY.                     |
+| `--staged`              | off                 | Read files from the git index instead of the working tree. Intended for pre-commit hooks. |
+| `--quiet`               | off                 | Suppress output when the scan is clean — no findings and no skipped files.                |
 
 ### Exit codes
 
@@ -81,9 +117,23 @@ unmask: custom pattern "aws-access-key-id" overrides the built-in pattern of the
 
 **The user is responsible for the correctness of a custom pattern that shadows a built-in.** `loadPatterns` validates that the regex compiles and the type fields are correct; it does not check that the pattern still detects the provider it names. A custom `aws-access-key-id` that accidentally matches the wrong format is not the tool's problem — the tool reports the override and moves on.
 
+## Pre-commit workflow
+
+The intended use of `--staged` is through the installed hook, not by hand. The hook runs:
+
+```bash
+unmask scan --staged --quiet
+```
+
+`--staged` switches the file source from the filesystem to the git index. `--quiet` suppresses the scan summary when there is nothing to report, so a clean commit produces no output.
+
+**`--quiet` does not suppress output when files were skipped.** A scan that could not read some files exits with code `2` and prints a summary, because an incomplete scan is not the same as a clean one. See [Scan runner](./scan-runner.md#the-skipped-files-signal) for why.
+
+Run `unmask scan --staged` without `--quiet` when debugging: the full output shows which files were staged, which were skipped, and which produced findings.
+
 ## Related
 
--   [Config](./config.md) — the file this CLI reads
--   [Finding and ScanResult](./finding.md) — the shape reporters receive
--   [Terminal reporter](./terminal-reporter.md) — the default output format
--   [JSON reporter](./json-reporter.md) — the machine-readable output format
+- [Config](./config.md) — the file this CLI reads
+- [Finding and ScanResult](./finding.md) — the shape reporters receive
+- [Terminal reporter](./terminal-reporter.md) — the default output format
+- [JSON reporter](./json-reporter.md) — the machine-readable output format
