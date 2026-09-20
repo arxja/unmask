@@ -1,0 +1,61 @@
+name: "Unmask secret scanner"
+description: "Scan a repository for hardcoded secrets and annotate findings on the pull request."
+author: "unmask"
+
+branding:
+  icon: "shield"
+  color: "red"
+
+inputs:
+  path:
+    description: "Directory to scan, relative to the repository root."
+    required: false
+    default: "."
+  fail-on:
+    description: "Minimum severity that fails the action: critical, high, medium, or low."
+    required: false
+    default: "medium"
+  annotations:
+    description: "Emit a GitHub annotation for each finding. Set to 'false' to disable."
+    required: false
+    default: "true"
+  output-file:
+    description: "Path to write the JSON results to, relative to the repository root."
+    required: false
+    default: "unmask-results.json"
+
+outputs:
+  findings:
+    description: "Total number of findings."
+    value: ${{ steps.scan.outputs.findings }}
+  unique-secrets:
+    description: "Number of distinct secrets (by fingerprint)."
+    value: ${{ steps.scan.outputs.unique-secrets }}
+  files-scanned:
+    description: "Number of files scanned successfully."
+    value: ${{ steps.scan.outputs.files-scanned }}
+  files-skipped:
+    description: "Number of files that could not be read or scanned."
+    value: ${{ steps.scan.outputs.files-skipped }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Verify unmask is available
+      shell: bash
+      run: |
+        if ! command -v unmask >/dev/null 2>&1; then
+          echo "::error::unmask is not on PATH. Install it before this action, e.g.: npm install -g unmask"
+          exit 1
+        fi
+
+    - name: Run unmask scan
+      id: scan
+      shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_ANNOTATIONS: ${{ inputs.annotations }}
+        INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
+      run: |
+        node "${{ github.action_path }}/entrypoint.mjs"
