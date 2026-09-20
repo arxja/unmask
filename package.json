@@ -18,8 +18,8 @@
     "corpus": "tsx test/benchmark/corpus-eval.ts"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Arash Jafafi",
+  "license": "MIT",
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
@@ -39,12 +39,10 @@
   "dependencies": {
     "@babel/parser": "^8.0.5",
     "@babel/types": "^8.0.5",
-    "acorn": "^8.18.0",
     "chalk": "^6.0.0",
     "commander": "^15.0.0",
     "cosmiconfig": "^10.0.1",
     "fast-glob": "^3.3.3",
-    "ora": "^9.4.1",
     "simple-git": "^3.36.0",
     "zod": "^4.6.1"
   }
