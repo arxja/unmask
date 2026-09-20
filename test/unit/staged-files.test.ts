@@ -43,9 +43,11 @@ beforeEach(() => {
 
 describe("gitStagedSource", () => {
   describe("constructor", () => {
-    it("constructs simple-git with the given rootDir", () => {
+    it("does not construct simple-git until read is called", () => {
       gitStagedSource({ rootDir: "/repo" });
-      expect(simpleGitCtorMock).toHaveBeenCalledWith({ baseDir: "/repo" });
+      // Construction is lazy: list() uses spawnSync, and simple-git is
+      // only needed for read().
+      expect(simpleGitCtorMock).not.toHaveBeenCalled();
     });
   });
 
