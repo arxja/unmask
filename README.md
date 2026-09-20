@@ -1,140 +1,342 @@
-# Unmask — API Secret Scanner
+# Unmask
 
-Pure Node.js CLI that scans a codebase for hardcoded secrets before they hit Git. Two-stage pipeline: fast regex detection over every file, then AST-based verification (only on files with a hit) to cut false positives.
+Unmask is a CLI that finds hardcoded secrets in a codebase before they reach Git. It runs a fast regex pass over every file, then an AST-based verification pass over only the files that produced a candidate — cutting the false positives that make most regex scanners get turned off after a week.
 
-> This README is the architecture source of truth. Update it when a module's responsibility changes — it exists so mid-project decisions don't get lost.
+**Pure Node.js. TypeScript, strict mode. Two-stage pipeline.**
 
-**Language:** TypeScript, strict mode, from day one. `tsx` for dev iteration (no compile step while building), `tsc`/`tsup` for the published build. See [TypeScript notes](#typescript-notes) below.
-
----
-
-## Pipeline
-
-```
+```text
 file-discovery → [worker pool] → detection (regex) → verification (AST) → finding[] → report
-                                                                              ↑
-                                                              git/ (staged files, hook)
-```
-
-1. **Discovery** — `fast-glob` walks the repo, respecting ignore rules. Produces a file path list, not contents.
-2. **Detection (cheap, runs on every file)** — streams each file line-by-line (`fs.createReadStream`), runs compiled regex patterns + entropy scoring. Any hit produces a candidate.
-3. **Verification (expensive, runs only on files with ≥1 candidate)** — parses the file to an AST (Acorn for JS, Babel/acorn-typescript for TS), walks to the enclosing node of each candidate, and applies false-positive rules (`process.env` reference, template literal placeholder, test/fixture path, constant aliasing).
-4. **Finding** — every surviving candidate becomes a canonical `Finding` object (see `src/core/finding.ts`). All consumers (terminal, JSON, git hook exit code, GitHub Action annotation) read from this shape — never format ad hoc per consumer.
-5. **Report** — terminal (chalk/ora), JSON (CI), always passed through `redact.ts` before anything is printed or logged.
-
-Parallelism (worker threads) applies to steps 2–3 only — I/O in step 1 doesn't need threading.
-
----
-
-## Key architectural decisions (and why)
-
-| Decision                                                                                                                                                    | Why                                                                                                                                                                                                                                                                                                               |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TypeScript, strict mode                                                                                                                                     | `Finding` is a shared contract read by every consumer (terminal/JSON/hook/Action) — a typed interface catches shape drift at compile time instead of in someone's CI. AST node shapes (Acorn/Babel) are deep and easy to misuse untyped. Worker `postMessage` payloads are a serialization boundary worth typing. |
-| Persistent worker pool + shared task queue, not per-file spawn                                                                                              | Spawn cost (10–50ms) makes per-file spawning slower than single-threaded for typical repos. Pool pulls from a queue so workers self-balance instead of sitting idle on an uneven fixed batch.                                                                                                                     |
-| Detection and verification are separate modules, not one blended worker step                                                                                | Keeps the worker file thin (orchestration only); each stage independently testable/benchmarkable.                                                                                                                                                                                                                 |
-| Pluggable parser interface (`verification/parsers/index.ts`)                                                                                                | Acorn alone can't parse TypeScript. Parser choice must be swappable without touching the false-positive rules that consume the AST. A `Parser` interface makes this a type-checked refactor later, not a hope-it-works one.                                                                                       |
-| Canonical `Finding` shape shared by all reporters                                                                                                           | Prevents terminal/JSON/CI output from drifting out of sync as new fields get added.                                                                                                                                                                                                                               |
-| Redaction happens at finding construction, not at output. `Finding.masked` is the only secret-derived field on the object; no consumer ever sees a raw value. | A scanner that prints the leaked key in CI logs defeats its own purpose.                                                                                                                                                                                                                                          |
-| Git "read staged state" and "install hook" are separate files                                                                                               | Different responsibilities (reading git state vs. writing to `.git/hooks/`); install must detect/chain existing hooks (Husky etc.) rather than clobber them.                                                                                                                                                      |
-| Config resolved once, validated against a schema                                                                                                            | `.unmaskrc` / `unmask.config.ts` drive ignore paths, custom patterns, severity thresholds — needed early since false-positive tuning and test fixtures depend on it.                                                                                                                                              |
-| Node as primary runtime, Bun compatibility opportunistic                                                                                                    | CI runners and global npm installs assume Node; `worker_threads`/AST libs are Node-native. Bun-specific optimizations (e.g. `Bun.file().stream()`) are a v2 consideration, gated behind a runtime check, not a v1 dependency.                                                                                     |
-
----
-
-## Folder structure (temp)
-
-```
-unmask/
-├── bin/
-│   └── unmask.ts                 # shebang entry; parses argv, dispatches to commands/
-│
-├── src/
-│   ├── commands/
-│   │   ├── scan.ts               # `unmask scan`
-│   │   └── install.ts            # `unmask install`
-│   │
-│   ├── core/
-│   │   ├── scheduler.ts          # persistent worker pool + shared task queue
-│   │   ├── scan-runner.ts        # discovery → pool → aggregation → results
-│   │   └── finding.ts            # canonical Finding interface/type
-│   │
-│   ├── discovery/
-│   │   └── file-discovery.ts     # fast-glob wrapper, ignore rules
-│   │
-│   ├── detection/
-│   │   ├── regex-engine.ts       # compiled patterns, line-stream matching
-│   │   └── entropy.ts            # Shannon entropy secondary signal
-│   │
-│   ├── verification/
-│   │   ├── parsers/
-│   │   │   ├── index.ts          # Parser interface + selection by extension
-│   │   │   ├── js-parser.ts      # Acorn
-│   │   │   └── ts-parser.ts      # acorn-typescript / @babel/parser + TS plugin
-│   │   └── false-positive-rules.ts
-│   │
-│   ├── worker/
-│   │   └── scan-worker.ts        # worker_threads entry point
-│   │
-│   ├── git/
-│   │   ├── staged-files.ts       # git diff --cached, git show :path
-│   │   └── hook-installer.ts     # writes/chains pre-commit hook
-│   │
-│   ├── config/
-│   │   ├── load-config.ts
-│   │   └── schema.ts
-│   │
-│   ├── report/
-│   │   ├── terminal-reporter.ts
-│   │   ├── json-reporter.ts
-│   │   └── redact.ts             # masks secret values before any output
-│   │
-│   └── data/
-│       └── patterns.json         # provider regex registry (plain JSON, typed on load)
-│
-├── action/
-│   ├── action.yml                # composite action
-│   └── entrypoint.ts             # only if a composite step alone isn't enough
-│
-├── test/
-│   ├── fixtures/
-│   │   ├── secrets/              # known real-shaped secrets (fake, correct format)
-│   │   └── false-positives/      # process.env usage, placeholders, test/example files
-│   ├── unit/
-│   └── benchmark/
-│       └── corpus-eval.ts        # measures actual false-positive rate against fixtures
-│
-├── dist/                         # compiled output (gitignored)
-├── .unmaskrc.example
-├── unmask.config.example.ts
-├── tsconfig.json
-├── package.json
-└── README.md
+                                                                             ↑
+                                                             git/ (staged files, hook)
 ```
 
 ---
 
-## TypeScript notes
+## Why
 
-- **`patterns.json` stays plain JSON**, not authored in TS — it's static data. Type it at the load boundary: `const patterns: Pattern[] = loadPatterns()`.
-- **Worker file paths point at compiled output, not source.** `new Worker(new URL('../../dist/worker/scan-worker.js', import.meta.url))` — decide `tsconfig`'s `outDir` layout before wiring up `scheduler.ts`, since scheduler code hardcodes this path.
-- **Strict mode from day one.** Retrofitting `strict: true` after the AST/false-positive logic is written is far more painful than starting with it — that logic is exactly where `any`-typed AST nodes hide bugs.
-- Module target: ESM (`"module": "NodeNext"` or `"ESNext"` depending on bundler choice) — cleaner interop with fast-glob, Acorn, Babel, all of which support ESM natively.
-- Dev loop: `tsx bin/unmask.ts scan --path .` — no build step while iterating. Add the `tsc`/`tsup` build only once you're packaging for npm publish.
+Every regex-only scanner drowns you in lockfile hashes, example keys from READMEs, and `process.env.API_KEY` references. Every AST-only scanner is too slow to run on a commit.
+
+Unmask splits the difference. Detection is cheap and runs on everything. Verification is expensive and runs only where it needs to — on the files that actually produced a hit. The two stages are separate modules with a typed contract between them, and the contract is what makes the whole thing testable.
 
 ---
 
-## Build order
+## Install
 
-1. **Discovery + regex registry + naive single-threaded scan**, end to end, no threads, no AST. Get a working CLI that finds _something_ and prints it.
-2. **AST-based false-positive filtering**, validated against `test/fixtures/` and measured by `test/benchmark/corpus-eval.ts`. This is the product's actual differentiator — don't skip building the corpus.
-3. **Worker thread pool**, only after profiling shows detection+verification is actually CPU-bound on a real repo. Don't thread before you've measured.
-4. **Git hook + GitHub Action**, last — both are thin wrappers around the same `scan-runner.ts`.
+```bash
+npm install -g unmask
+```
+
+Or run it locally without installing:
+
+```bash
+pnpm dlx unmask scan --path .
+```
+
+Requires Node.js 20 or later.
 
 ---
 
-## Non-goals (for now)
+## Quick start
 
-- Scanning binary files, images, or archives
-- Secret _rotation_ or remediation — Unmask detects, it doesn't fix
-- Historical git blame / full-history scanning (v1 is staged/working-tree only)
+Scan the current directory:
+
+```bash
+unmask scan
+```
+
+Install a pre-commit hook so secrets can't be committed in the first place:
+
+```bash
+unmask install
+```
+
+That's it. The hook reads the git index (what a commit will record), not the working tree, so it catches exactly what `git commit` would have written.
+
+---
+
+## Commands
+
+### `unmask scan`
+
+Walk a directory, run the built-in and custom patterns against every file, and report findings.
+
+```bash
+unmask scan [options]
+```
+
+| Flag                    | Default            | Meaning                                                               |
+| ----------------------- | ------------------ | --------------------------------------------------------------------- |
+| `-p, --path <dir>`      | `.`                | Directory to scan.                                                    |
+| `-f, --format <format>` | `terminal`         | `terminal` for human output, `json` for machine-readable.             |
+| `-o, --output <file>`   | stdout             | Write output to a file. Requires `--format=json`.                     |
+| `--fail-on <severity>`  | config or `medium` | Minimum severity that produces exit code `1`.                         |
+| `--max-findings <n>`    | `50`               | Maximum findings to print in terminal format. `0` = unlimited.        |
+| `--verbose`             | off                | Print the masked source line under each finding.                      |
+| `--no-color`            | auto               | Disable ANSI colors. Auto-detects `NO_COLOR`, `FORCE_COLOR`, and TTY. |
+| `--staged`              | off                | Read files from the git index instead of the working tree.            |
+| `--quiet`               | off                | Suppress output when the scan is clean.                               |
+| `--concurrency <n>`     | `1`                | Worker threads. Values >1 use a pool; output is identical.            |
+
+### `unmask install`
+
+Install the pre-commit hook in the current repository.
+
+```bash
+unmask install [--path <dir>]
+```
+
+If a pre-commit hook already exists (Husky, a shell script, anything), unmask renames it to `pre-commit.unmask-original` and chains it — the original runs first, and its failure aborts the commit before unmask runs.
+
+If git is configured with a custom `core.hooksPath`, install refuses rather than writing a hook that git will ignore.
+
+### `unmask uninstall`
+
+Remove the pre-commit hook. Restores any chained original.
+
+```bash
+unmask uninstall [--path <dir>]
+```
+
+Refuses to remove a hook that unmask didn't install. Idempotent — running it when no hook exists succeeds.
+
+---
+
+## Exit codes
+
+| Code | Meaning                                                       |
+| ---- | ------------------------------------------------------------- |
+| `0`  | Clean. No findings at or above `--fail-on`, no skipped files. |
+| `1`  | Findings at or above `--fail-on`.                             |
+| `2`  | Scan incomplete (files could not be read) or a startup error. |
+
+**A scan that reads zero files and reports zero findings is not clean** — it exits with code `2`. CI should gate on this: an incomplete scan is a different failure mode from a clean one, and conflating them is how a scanner silently stops working.
+
+---
+
+## Configuration
+
+Unmask looks for `.unmaskrc`, `.unmaskrc.json`, `.unmaskrc.yaml`, `unmask.config.js`, or `unmask.config.ts` starting from `--path` and walking up.
+
+```json
+{
+  "ignore": ["test/**", "docs/**"],
+  "include": ["src/**/*.ts"],
+  "failOn": "high",
+  "customPatterns": "./patterns.json"
+}
+```
+
+| Field            | Type                                      | Default    | Meaning                                                                          |
+| ---------------- | ----------------------------------------- | ---------- | -------------------------------------------------------------------------------- |
+| `ignore`         | `string[]`                                | `[]`       | Additional glob patterns to ignore, on top of the discovery defaults.            |
+| `include`        | `string[]`                                | `["**/*"]` | Glob patterns to include.                                                        |
+| `failOn`         | `critical` \| `high` \| `medium` \| `low` | `medium`   | Minimum severity that produces exit code `1`. Overridden by `--fail-on`.         |
+| `customPatterns` | `string`                                  | —          | Path to a JSON file with additional patterns. Relative to the scanned directory. |
+
+### Custom patterns
+
+Custom patterns are loaded after the built-in registry and merged by `id`. A custom pattern with the same `id` as a built-in **overrides** it, and a message is printed on stderr when the scan starts.
+
+The pattern format is the same as the built-in registry:
+
+```json
+{
+  "id": "my-service-token",
+  "name": "My Service Token",
+  "provider": "myservice",
+  "regex": "(mst_[A-Za-z0-9]{32})",
+  "flags": "",
+  "confidence": "high",
+  "severity": "critical",
+  "entropyCheck": false
+}
+```
+
+**The last non-empty capture group is treated as the secret.** If your pattern has multiple groups, the last one must be the value you want to detect. Use `(?:...)` for any grouping you don't want treated as the secret.
+
+---
+
+## How it works
+
+### 1. Discovery
+
+`fast-glob` walks the repo, respecting the built-in ignore list (`node_modules`, `.git`, lockfiles) plus whatever `ignore` adds. Discovery returns paths, not contents.
+
+### 2. Detection
+
+For each file, every compiled pattern runs line-by-line. A match produces a `Candidate` — the finding plus the raw secret value. The raw value exists only in the interval between detection and verification; it never lands on a `Finding`.
+
+If a pattern has `entropyCheck: true`, the extracted secret must pass a Shannon entropy gate before a candidate is produced. This is what filters out the low-entropy garbage that shape-matches a pattern.
+
+### 3. Verification
+
+Only files that produced at least one candidate get parsed to an AST (`@babel/parser`). The AST powers a small set of false-positive rules:
+
+| Rule                | Verdict | What it detects                                                                                                                                           |
+| ------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test-path`         | adjust  | File path matches a test, fixture, example, or mock pattern. Downgrades severity to `low`.                                                                |
+| `placeholder-value` | drop    | Value contains a known placeholder marker (`YOUR_`, `CHANGEME`, `EXAMPLE`, …) or matches a placeholder shape (`<...>`, `${...}`, 8+ repeated characters). |
+| `constant-alias`    | drop    | Value is assigned to a variable whose innermost declaration has a fixture-style name (`MOCK_`, `FAKE_`, `TEST_`, …).                                      |
+| `env-reference`     | drop    | Value falls inside a `process.env.X` or `import.meta.env.X` expression.                                                                                   |
+
+A `drop` verdict removes the candidate. An `adjust` verdict lowers severity so `--fail-on` decides whether it's worth failing the build over. Rules never mutate findings; they return a verdict and the runner applies it.
+
+### 4. Finding
+
+Every surviving candidate becomes a canonical `Finding` object. All consumers — terminal reporter, JSON reporter, git hook exit code, GitHub Action annotation — read from this one shape.
+
+**`Finding.masked` is the only secret-derived field on the object.** The raw value is gone by the time a `Finding` exists. Redaction happens at construction, not at output, which means no reporter can leak what it never sees.
+
+### 5. Report
+
+Terminal output for humans, JSON for CI. Both consume the same `ScanResult` shape.
+
+### Parallelism
+
+The worker pool parallelizes detection and verification. Discovery is I/O-bound and runs on the main thread. The pool is **opt-in** (`--concurrency > 1`) because worker spawn cost dominates on small repos — a 45-file repo is faster single-threaded.
+
+---
+
+## GitHub Action
+
+A composite action is available under `action/`. It runs `unmask scan`, emits PR annotations at the file and line of each finding, and fails the job based on `--fail-on`.
+
+```yaml
+- uses: actions/checkout@v4
+
+- name: Install unmask
+  run: npm install -g unmask
+
+- uses: ./.github/actions/unmask
+  with:
+    fail-on: high
+```
+
+See `action/README.md` for inputs and outputs.
+
+---
+
+## Architecture
+
+```text
+src/
+├── commands/         CLI subcommands (scan, install, uninstall)
+├── core/
+│   ├── finding.ts        canonical Finding/ScanResult types + comparators
+│   ├── file-source.ts    FileSource abstraction (disk | git-staged)
+│   ├── scan-runner.ts    orchestration: list → read → detect → verify → aggregate
+│   └── scheduler.ts      persistent worker pool
+├── detection/
+│   ├── regex-engine.ts   pattern loading, line-by-line matching, extraction
+│   └── entropy.ts        Shannon entropy gate
+├── verification/
+│   ├── verify.ts         rule pipeline
+│   ├── node-locator.ts   offset → enclosing AST node
+│   ├── parsers/          @babel/parser wrapper
+│   ├── rules/            one file per false-positive rule
+│   └── types.ts          Rule / VerificationContext interfaces
+├── discovery/
+│   └── file-discovery.ts fast-glob wrapper
+├── worker/
+│   ├── protocol.ts       ToWorker / FromWorker message types
+│   └── scan-worker.ts    worker thread entry point
+├── git/
+│   ├── staged-files.ts   read from the git index
+│   └── hook-installer.ts install/uninstall the pre-commit hook
+├── config/
+│   ├── schema.ts         zod schema
+│   └── load-config.ts    cosmiconfig loader
+├── report/
+│   ├── redact.ts         masking (single source of truth)
+│   ├── terminal-reporter.ts
+│   └── json-reporter.ts
+└── data/
+    └── patterns.json     built-in provider registry
+```
+
+### Key decisions
+
+**Redaction at construction, not at output.** `Finding.masked` is the only secret-derived field. Reporters don't import `redact`; they can't leak what they don't receive. This is a stronger guarantee than "redact before printing" and it's enforced by the type system — there is no field on `Finding` that can hold a raw value.
+
+**The `Candidate` boundary.** Rules need the raw secret to detect placeholders. `scanContent` returns `Candidate[]` (finding + raw value); `verifyFindings` returns `Finding[]`. The raw value exists only in that interval.
+
+**One parser, not two.** `@babel/parser` handles both JavaScript and TypeScript with plugin flags. One AST shape, no cross-parser normalization, fewer moving parts.
+
+**Rules return a verdict, not a boolean.** `keep | drop | adjust` — rules that can't be certain can downgrade instead of deciding. Multiple `adjust` verdicts compose; a `drop` is terminal.
+
+**Custom patterns shadow built-ins by `id`.** Users can override a pattern whose regex doesn't fit their codebase. Conflicts are reported on stderr so accidental shadowing is visible.
+
+**Worker pool is opt-in.** Default `--concurrency` is `1`. Workers cost 10–50ms each to spawn, and on a small repo that exceeds the work. Threading is a scale tool, not a default.
+
+**Git hook reads the index, not the working tree.** A developer can have a secret on disk that's unstaged — that's not what `git commit` will record. `git show :path` is the ground truth for what a commit contains.
+
+---
+
+## Development
+
+### Setup
+
+```bash
+pnpm install
+```
+
+### Run tests
+
+```bash
+pnpm test              # watch mode
+pnpm test -- run       # single pass
+```
+
+### Run the corpus
+
+The corpus measures recall and precision against labeled fixtures under `test/fixtures/`.
+
+```bash
+pnpm corpus
+```
+
+Output reports total recall, precision, and a per-rule rejection breakdown. A rule that rejects zero fixtures is dead weight. A rule that rejects everything is suspicious.
+
+### Build
+
+```bash
+pnpm build
+node dist/bin/unmask.js scan --path .
+```
+
+The build produces `dist/bin/unmask.js`, `dist/worker/scan-worker.js`, and `dist/data/patterns.json`. The worker must be a separate file at a known location — `resolveWorkerPath` computes it from the scheduler's own `import.meta.url`.
+
+### Dev loop
+
+Run from source with `tsx` — no build step:
+
+```bash
+pnpm tsx bin/unmask.ts scan --path .
+```
+
+---
+
+## Limitations
+
+- **No streaming.** Files are read fully into memory as strings. Files significantly larger than memory will fail at the read and be recorded in `filesSkipped`.
+- **No submodule scanning.** `git diff --cached` reports a submodule as a single entry; files inside it are not scanned by the hook.
+- **`test-path` downgrades rather than drops.** A committed secret can leak from a test file as easily as from source. Downgrading lets the CLI's `--fail-on` threshold decide whether it fails the build, without hiding the finding.
+- **`constant-alias` matches on variable name, not alias relationships.** It catches `const MOCK_KEY = "..."` but not `const x = MOCK_KEY;`. Full alias analysis requires scope tracking across statements.
+- **`template-literal-value` is written but unregistered.** No pattern in the current registry produces a candidate that would trigger it. It ships when a pattern that matches a bare identifier or URL fragment lands.
+- **Windows path resolution for the hook is imperfect.** The hook script checks `node_modules/.bin/unmask`, which is the POSIX path. On Windows with Git Bash or WSL it works; a native Windows git install may require a manual adjustment.
+- **The GitHub Action does not install unmask.** A prior step in the workflow is responsible. The action assumes the binary is on `PATH`.
+
+---
+
+## Non-goals
+
+- **Scanning binary files, images, or archives.** Unmask scans text.
+- **Secret rotation or remediation.** Unmask detects, it doesn't fix.
+- **Historical git history scanning.** v1 is staged/working-tree only.
+- **SARIF output.** The JSON reporter is the canonical machine-readable format. SARIF is a different feature.
+
+---
+
+## License
+
+MIT - Arash Jafari 2026

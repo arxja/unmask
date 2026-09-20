@@ -8,19 +8,59 @@ import {
   runInstall,
   runUninstall,
 } from "../src/commands/install";
+import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // Read package.json at runtime to keep the version string in one place.
 // `createRequire` gives us CommonJS `require` semantics inside an ESM
 // module — the JSON is loaded synchronously, which is fine at startup.
 const require = createRequire(import.meta.url);
-const pkg = require("../package.json") as { version: string };
+
+/**
+ * Read the package version by walking up from this file until a
+ * package.json is found.
+ *
+ * Layouts this has to work in:
+ *   dev:     <root>/bin/unmask.ts          → <root>/package.json
+ *   build:   <root>/dist/bin/unmask.js     → <root>/package.json
+ *   install: <pkg>/dist/bin/unmask.js      → <pkg>/package.json
+ *
+ * A fixed relative path fails at least one of these. The upward walk
+ * finds the nearest ancestor package.json, which is the right one in
+ * every case: the walk starts inside the unmask package directory and
+ * stops before escaping it.
+ */
+function readPackageVersion(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  while (true) {
+    const candidate = join(dir, "package.json");
+    if (existsSync(candidate)) {
+      try {
+        const pkg = JSON.parse(readFileSync(candidate, "utf-8")) as {
+          version?: unknown;
+        };
+        if (typeof pkg.version === "string") return pkg.version;
+      } catch {
+        // Malformed JSON or read error — fall through to the parent.
+        // Not expected in practice; the fallback is defensive.
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break; // filesystem root
+    dir = parent;
+  }
+  return "0.0.0";
+}
+
+const pkgVersion = readPackageVersion();
 
 const program = new Command();
 
 program
   .name("unmask")
   .description("Scan a codebase for hardcoded secrets")
-  .version(pkg.version, "-v, --version");
+  .version(pkgVersion, "-v, --version");
 
 program
   .command("scan")
@@ -29,6 +69,7 @@ program
     "-p, --path <dir>",
     "directory to scan (default: current working directory)",
   )
+  .option("--concurrency <n>", "worker threads for scanning (default: 1)", "1")
   .option("-f, --format <format>", "output format: terminal | json", "terminal")
   .option(
     "-o, --output <file>",
@@ -48,7 +89,7 @@ program
   )
   .option("--quiet", "suppress output when the scan is clean")
   .action(async (opts: ScanCliOptions) => {
-    const code = await runScan(opts, pkg.version);
+    const code = await runScan(opts, pkgVersion);
     process.exitCode = code;
   });
 

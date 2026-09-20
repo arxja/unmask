@@ -14,6 +14,7 @@
 import { performance } from "node:perf_hooks";
 
 import { diskSource, type FileSource } from "./file-source";
+import { runPool } from "./scheduler";
 import { scanContent, type Pattern } from "../detection/regex-engine";
 import { verifyFindings } from "../verification/verify";
 import type { Finding } from "./finding";
@@ -38,6 +39,12 @@ export interface ScanInput {
    * ignored — the source owns its own filtering.
    */
   source?: FileSource;
+  /**
+   * Worker threads for the scan. `1` (default) runs single-threaded on
+   * the main thread. Values >1 spawn a pool. Output is identical either
+   * way — only wall time changes.
+   */
+  concurrency?: number;
 }
 
 export interface SkippedFile {
@@ -61,36 +68,55 @@ export interface ScanResult {
 export async function scan(input: ScanInput): Promise<ScanResult> {
   const start = performance.now();
   const { rootDir, patterns, version } = input;
+  const concurrency = input.concurrency ?? 1;
 
   const source =
     input.source ?? diskSource({ rootDir, discovery: input.discovery });
 
+  const paths = source.list();
   const findings: Finding[] = [];
   const filesSkipped: SkippedFile[] = [];
   let filesScanned = 0;
 
-  for (const relPath of source.list()) {
-    let content: string;
-    try {
-      content = await source.read(relPath);
-    } catch (error) {
-      filesSkipped.push({ path: relPath, reason: describeError(error) });
-      continue;
-    }
+  if (concurrency > 1) {
+    const results = await runPool(paths, {
+      concurrency,
+      patterns,
+      reader: source.readerConfig,
+    });
 
-    try {
-      const candidates = scanContent(content, relPath, patterns);
-      const verified =
-        candidates.length > 0
-          ? verifyFindings(candidates, content, relPath)
-          : [];
-      findings.push(...verified);
-      filesScanned++;
-    } catch (error) {
-      filesSkipped.push({
-        path: relPath,
-        reason: `scan failed: ${describeError(error)}`,
-      });
+    for (const r of results) {
+      if (r.findings !== undefined) {
+        findings.push(...r.findings);
+        filesScanned++;
+      } else if (r.error !== undefined) {
+        filesSkipped.push({ path: r.path, reason: r.error });
+      }
+    }
+  } else {
+    for (const relPath of paths) {
+      let content: string;
+      try {
+        content = await source.read(relPath);
+      } catch (error) {
+        filesSkipped.push({ path: relPath, reason: describeError(error) });
+        continue;
+      }
+
+      try {
+        const candidates = scanContent(content, relPath, patterns);
+        const verified =
+          candidates.length > 0
+            ? verifyFindings(candidates, content, relPath)
+            : [];
+        findings.push(...verified);
+        filesScanned++;
+      } catch (error) {
+        filesSkipped.push({
+          path: relPath,
+          reason: `scan failed: ${describeError(error)}`,
+        });
+      }
     }
   }
 

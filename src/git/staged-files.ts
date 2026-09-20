@@ -9,8 +9,18 @@ export interface GitStagedSourceOptions {
   include?: readonly string[];
 }
 
+/**
+ * Read one file from the git index. Standalone — usable without
+ * constructing a FileSource. The worker calls this directly.
+ */
+export async function readStagedFile(
+  rootDir: string,
+  path: string,
+): Promise<string> {
+  return simpleGit({ baseDir: rootDir }).show([`:${path}`]);
+}
+
 export function gitStagedSource(opts: GitStagedSourceOptions): FileSource {
-  const git = simpleGit({ baseDir: opts.rootDir });
   const ignore = opts.ignore ?? [];
   const include = opts.include ?? ["**/*"];
 
@@ -23,9 +33,11 @@ export function gitStagedSource(opts: GitStagedSourceOptions): FileSource {
       return cachedList;
     },
 
-    async read(relPath) {
-      return git.show([`:${relPath}`]);
+    read(relPath) {
+      return readStagedFile(opts.rootDir, relPath);
     },
+
+    readerConfig: { kind: "git-staged", rootDir: opts.rootDir },
   };
 }
 

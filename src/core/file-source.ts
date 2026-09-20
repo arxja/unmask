@@ -24,9 +24,24 @@ import {
   type DiscoverOptions,
 } from "../discovery/file-discovery";
 
+/**
+ * Serializable reader configuration. Crosses the worker message
+ * boundary; therefore every field must be structured-cloneable
+ * (strings, numbers, plain objects, arrays — no functions).
+ *
+ * The config describes how to READ a file by relative path. It does
+ * not describe how to LIST files — listing is done once, on the main
+ * thread, before any worker is spawned.
+ */
+export type ReaderConfig =
+  | { kind: "disk"; rootDir: string }
+  | { kind: "git-staged"; rootDir: string };
+
 export interface FileSource {
   list(): string[];
   read(relPath: string): Promise<string>;
+  /** Serializable reader config for reconstructing the source in a worker. */
+  readonly readerConfig: ReaderConfig;
 }
 
 export interface DiskSourceOptions {
@@ -47,6 +62,8 @@ export function diskSource(opts: DiskSourceOptions): FileSource {
       const abs = isAbsolute(relPath) ? relPath : join(rootDir, relPath);
       return readFile(abs, "utf-8");
     },
+
+    readerConfig: { kind: "disk", rootDir },
   };
 }
 
