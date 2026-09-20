@@ -24,10 +24,13 @@ export interface ScanCliOptions {
   staged?: boolean;
   /** Suppress output when the scan is clean. */
   quiet?: boolean;
+  /** Worker threads for the scan. Passed through to scan(). */
+  concurrency?: string;
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUILTIN_PATTERNS_PATH = resolve(HERE, "../data/patterns.json");
+const DEFAULT_CONCURRENCY = 1;
 
 export async function runScan(
   opts: ScanCliOptions,
@@ -45,6 +48,7 @@ export async function runScan(
 
   const config = await configLoader(rootDir);
   const failOn: Severity = opts.failOn ?? config.failOn ?? "medium";
+  const concurrency = parseConcurrency(opts.concurrency);
 
   const builtin = loadPatterns(BUILTIN_PATTERNS_PATH);
   const custom = config.customPatterns
@@ -72,6 +76,7 @@ export async function runScan(
     discovery: { ignore: config.ignore, include: config.include },
     version,
     source,
+    concurrency,
   });
 
   // --quiet: print nothing only when the scan is genuinely clean. A
@@ -128,6 +133,15 @@ function parseCount(raw: string | undefined, fallback: number): number {
     throw new Error(
       `--max-findings must be a non-negative integer (got "${raw}")`,
     );
+  }
+  return n;
+}
+
+function parseConcurrency(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_CONCURRENCY;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    throw new Error(`--concurrency must be a positive integer (got "${raw}")`);
   }
   return n;
 }
